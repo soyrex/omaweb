@@ -1,0 +1,291 @@
+Touchpad history navigation: break-proof receipts
+
+All mutations below used isolated copies. Repository sources and the installed browser were not
+mutated. Every broken test was run with a passing control and a passing restoration. QML disk
+caching was disabled. These are focused feature proofs; full-suite results are in the PR.
+
+fixture-proof.log
+=================
+hideAndStaleQuery exit 0
+hideAndStaleQuery exit 1
+hideAndStaleQuery exit 0
+modifierDuringQuery exit 0
+modifierDuringQuery exit 1
+modifierDuringQuery exit 0
+angleOnlyAndDiagonal exit 0
+angleOnlyAndDiagonal exit 1
+angleOnlyAndDiagonal exit 0
+missingEnd exit 0
+missingEnd exit 1
+missingEnd exit 0
+
+fixture-original-proof.log
+==========================
+direction:back control exit 0
+direction:back break exit 1
+direction:back restored exit 0
+direction:forward control exit 0
+direction:forward break exit 1
+direction:forward restored exit 0
+belowThresholdAndReversal control exit 0
+belowThresholdAndReversal break exit 1
+belowThresholdAndReversal restored exit 0
+verticalModifiersAndWheel control exit 0
+verticalModifiersAndWheel break exit 1
+verticalModifiersAndWheel restored exit 0
+unavailable control exit 0
+unavailable break exit 1
+unavailable restored exit 0
+rejectedAndTimeoutReplay control exit 0
+rejectedAndTimeoutReplay break exit 1
+rejectedAndTimeoutReplay restored exit 0
+asynchronousEndAndMomentum control exit 0
+asynchronousEndAndMomentum break exit 1
+asynchronousEndAndMomentum restored exit 0
+syntheticAndDisabled control exit 0
+syntheticAndDisabled break exit 1
+syntheticAndDisabled restored exit 0
+
+fixture-extra-proof.log
+=======================
+modifiedInputPasses control exit 0
+modifiedInputPasses break exit 1
+modifiedInputPasses restored exit 0
+plainWheelPasses control exit 0
+plainWheelPasses break exit 1
+plainWheelPasses restored exit 0
+timeoutReplays control exit 0
+timeoutReplays break exit 1
+timeoutReplays restored exit 0
+asynchronousEndAndMomentum control exit 0
+asynchronousEndAndMomentum break exit 1
+asynchronousEndAndMomentum restored exit 0
+momentumCannotCompleteGesture control exit 0
+momentumCannotCompleteGesture break exit 1
+momentumCannotCompleteGesture restored exit 0
+
+fixture-disabled-proof.log
+==========================
+syntheticAndDisabled control exit 0
+syntheticAndDisabled break exit 1
+syntheticAndDisabled restored exit 0
+
+proof.log
+=========
+destructionCancels:view active control 0
+destructionCancels:view active break 1
+destructionCancels:view active restored 0
+destructionCancels:page active control 0
+destructionCancels:page active break 1
+destructionCancels:page active restored 0
+destructionCancels:page query control 0
+destructionCancels:page query break 1
+destructionCancels:page query restored 0
+
+host-proof.log
+==============
+link 0
+control 0
+broken 1
+restored 0
+
+summary.json
+============
+[
+  {
+    "stage": "control",
+    "exit": 0
+  },
+  {
+    "stage": "broken",
+    "exit": 1
+  },
+  {
+    "stage": "restored",
+    "exit": 0
+  }
+]
+summary.json
+============
+[
+  {
+    "mutation": "empty_page",
+    "control": 0,
+    "broken": 1,
+    "restored": 0
+  },
+  {
+    "mutation": "scroll_chain",
+    "control": 0,
+    "broken": 1,
+    "restored": 0
+  },
+  {
+    "mutation": "rtl",
+    "control": 0,
+    "broken": 1,
+    "restored": 0
+  },
+  {
+    "mutation": "containment",
+    "control": 0,
+    "broken": 1,
+    "restored": 0
+  },
+  {
+    "mutation": "opaque_targets",
+    "control": 0,
+    "broken": 1,
+    "restored": 0
+  },
+  {
+    "mutation": "shadow_chain",
+    "control": 0,
+    "broken": 1,
+    "restored": 0
+  },
+  {
+    "mutation": "fullscreen",
+    "control": 0,
+    "broken": 1,
+    "restored": 0
+  }
+]
+
+Representative observed failures
+===============================
+
+disabled-syntheticAndDisabled-break.log
+FAIL!  : QtHistorySwipeTest::syntheticAndDisabled() Compared values are not the same
+   Actual   (query.size()): 1
+   Expected (0)           : 0
+   Loc: [tst_qthistoryswipe.cpp(227)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 0ms
+
+extra-momentumCannotCompleteGesture-break.log
+FAIL!  : QtHistorySwipeTest::momentumCannotCompleteGesture() Compared values are not the same
+   Actual   (navigation.size()): 1
+   Expected (0)                : 0
+   Loc: [tst_qthistoryswipe.cpp(214)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 0ms
+
+extra-asynchronousEndAndMomentum-break.log
+FAIL!  : QtHistorySwipeTest::asynchronousEndAndMomentum() Compared values are not the same
+   Actual   (page.heard.size()): 4
+   Expected (heard)            : 2
+   Loc: [tst_qthistoryswipe.cpp(201)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 1ms
+
+extra-timeoutReplays-break.log
+FAIL!  : QtHistorySwipeTest::timeoutReplays() Compared values are not the same
+   Actual   (page.heard.size()): 1
+   Expected (2)                : 2
+   Loc: [tst_qthistoryswipe.cpp(182)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 1510ms
+
+extra-plainWheelPasses-break.log
+FAIL!  : QtHistorySwipeTest::plainWheelPasses() Compared values are not the same
+   Actual   (query.size()): 1
+   Expected (0)           : 0
+   Loc: [tst_qthistoryswipe.cpp(147)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 0ms
+
+extra-modifiedInputPasses-break.log
+FAIL!  : QtHistorySwipeTest::modifiedInputPasses() Compared values are not the same
+   Actual   (query.size()): 1
+   Expected (0)           : 0
+   Loc: [tst_qthistoryswipe.cpp(138)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 0ms
+
+original-syntheticAndDisabled-break.log
+FAIL!  : QtHistorySwipeTest::syntheticAndDisabled() Compared values are not the same
+   Actual   (query.size()): 1
+   Expected (0)           : 0
+   Loc: [tst_qthistoryswipe.cpp(227)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 0ms
+
+original-asynchronousEndAndMomentum-break.log
+FAIL!  : QtHistorySwipeTest::asynchronousEndAndMomentum() Compared values are not the same
+   Actual   (navigation.size()): 0
+   Expected (1)                : 1
+   Loc: [tst_qthistoryswipe.cpp(196)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 1ms
+
+original-rejectedAndTimeoutReplay-break.log
+FAIL!  : QtHistorySwipeTest::rejectedAndTimeoutReplay() Compared values are not the same
+   Actual   (page.heard.size()): 1
+   Expected (2)                : 2
+   Loc: [tst_qthistoryswipe.cpp(168)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 2ms
+
+original-unavailable-break.log
+FAIL!  : QtHistorySwipeTest::unavailable() Compared values are not the same
+   Actual   (query.size()): 1
+   Expected (0)           : 0
+   Loc: [tst_qthistoryswipe.cpp(157)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 0ms
+
+original-verticalModifiersAndWheel-break.log
+FAIL!  : QtHistorySwipeTest::verticalModifiersAndWheel() Compared values are not the same
+   Actual   (query.size()): 1
+   Expected (0)           : 0
+   Loc: [tst_qthistoryswipe.cpp(130)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 1ms
+
+original-belowThresholdAndReversal-break.log
+FAIL!  : QtHistorySwipeTest::belowThresholdAndReversal() Compared values are not the same
+   Actual   (navigation.size()): 1
+   Expected (0)                : 0
+   Loc: [tst_qthistoryswipe.cpp(117)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 1ms
+
+original-direction-forward-break.log
+FAIL!  : QtHistorySwipeTest::direction(forward) Compared values are not the same
+   Actual   (query.first().at(2).toInt()): -1
+   Expected (direction)                  : 1
+   Loc: [tst_qthistoryswipe.cpp(101)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 1ms
+
+original-direction-back-break.log
+FAIL!  : QtHistorySwipeTest::direction(back) Compared values are not the same
+   Actual   (query.first().at(2).toInt()): 1
+   Expected (direction)                  : -1
+   Loc: [tst_qthistoryswipe.cpp(101)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 0ms
+
+destructionCancels-page query-break.log
+FAIL!  : QtHistorySwipeTest::destructionCancels(page query) Compared values are not the same
+   Actual   (swipe.progress()): 1.083333333333333 (0x1.1555555555555p+0)
+   Expected (0)               : 0
+   Loc: [tst_qthistoryswipe.cpp(331)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 0ms
+
+destructionCancels-page active-break.log
+FAIL!  : QtHistorySwipeTest::destructionCancels(page active) Compared values are not the same
+   Actual   (swipe.progress()): 1.083333333333333 (0x1.1555555555555p+0)
+   Expected (0)               : 0
+   Loc: [tst_qthistoryswipe.cpp(329)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 1ms
+
+destructionCancels-view active-break.log
+FAIL!  : QtHistorySwipeTest::destructionCancels(view active) Compared values are not the same
+   Actual   (swipe.progress()): 1.083333333333333 (0x1.1555555555555p+0)
+   Expected (0)               : 0
+   Loc: [tst_qthistoryswipe.cpp(329)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 2ms
+
+broken.log
+FAIL!  : QtEngineContractTest::qtHistorySwipeNavigatesWithoutTakingPageScrolling() Compared values are not the same
+   Actual   (shown.adapter->property("pageTitle").toString())       : "/second"
+   Expected ((QString(QtPrivate::qMakeStringPrivate(u"" "/first")))): "/first"
+   Loc: [<checkout>/tests/engine/tst_qtenginecontract.cpp(2642)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 47150ms
+
+broken.log
+FAIL!  : omaweb_ui::BrowserChrome::test_historySwipeFeedbackTracksDirectionAndCancellation() 'verify()' returned FALSE. ()
+   Loc: [<isolated-copy>/tests/ui/tst_main.qml(480)]
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 367ms
+
+Pending-query destruction proof removes both the cancellation callbacks and the null-page
+refusal guard; it is a combined break of redundant protections. The real-renderer proof uses a
+valid JavaScript no-op in place of Back, so its failure is a wrong page title, not a parse error.
