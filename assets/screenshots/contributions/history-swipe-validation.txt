@@ -1,0 +1,119 @@
+Touchpad history navigation: final local validation
+
+Feature commit: 7fc9f78
+Base: 48dd66433869574cd135ccf29dee572081c20c2a
+Platform: Linux/aarch64; Qt 6.12.0; omaweb-qtwebengine 6.11.3-1.
+
+GCC CI preset build passed under warnings-as-errors.
+Clang compiled all changed C++ units under the CI warning flags, including the revised fixture.
+Release preset with compiled QML built, passed startup validation, and loaded a real local page
+in an isolated D-Bus session and temporary profile.
+
+The full local suite is NOT green. The remaining failures below also reproduce with untouched
+upstream adapter/UI sources from the base commit, through the same test harness and installed
+engine. These are source controls, not a separately rebuilt clean upstream binary. Existing
+color expectations and performance thresholds are preserved by this PR.
+
+Core checks
+===========
+100% tests passed out of 120
+Total Test time (real) = 204.69 sec
+
+Native gesture suite
+====================
+Totals: 21 passed, 0 failed, 0 skipped, 0 blacklisted, 1515ms
+
+Final renderer rerun
+====================
+FAIL!  : QtEngineContractTest::qtDarkensAPageWithNoDarkThemeAndLeavesADarkOneAlone() Compared values are not the same
+   Actual   (show("/bare"))           : #ff1b1b1b
+   Expected (QColor(0x12, 0x12, 0x12)): #ff121212
+   Loc: [<checkout>/tests/engine/tst_qtenginecontract.cpp(3309)]
+PASS   : QtEngineContractTest::qtAppliesDarkeningToTheOpenPageWithoutAReload()
+FAIL!  : QtEngineContractTest::qtLeavesAClassBasedDarkThemeAsWritten() Compared values are not the same
+   Actual   (pageAreaColour(shown.window)): #ff1b1b1b
+   Expected (QColor(0x12, 0x12, 0x12))    : #ff121212
+   Loc: [<checkout>/tests/engine/tst_qtenginecontract.cpp(3489)]
+PASS   : QtEngineContractTest::qtFollowsAStyleSheetThatArrivesLate()
+FAIL!  : QtEngineContractTest::qtStartsEachDocumentDarkenedAfterAPageLeftAlone() Compared values are not the same
+   Actual   (pageAreaColour(shown.window)): #ff1b1b1b
+   Expected (QColor(0x12, 0x12, 0x12))    : #ff121212
+   Loc: [<checkout>/tests/engine/tst_qtenginecontract.cpp(3855)]
+PASS   : QtEngineContractTest::qtCoversAPageLeftAsWrittenInItsOwnGround()
+FAIL!  : QtEngineContractTest::qtKeepsAWhitePageDarkenedUnderAModalBackdrop() Compared values are not the same
+   Actual   (pageAreaColour(page.shown.window, QPoint(320, 240))): #ff1b1b1b
+   Expected (QColor(0x12, 0x12, 0x12))                           : #ff121212
+   Loc: [<checkout>/tests/engine/tst_qtenginecontract.cpp(3653)]
+PASS   : QtEngineContractTest::qtKeepsAWhitePageDarkenedBesideADarkRail()
+Totals: 306 passed, 4 failed, 0 skipped, 0 blacklisted, 295493ms
+0% tests passed, 1 tests failed out of 1
+Total Test time (real) = 295.60 sec
+
+Untouched adapter color control
+===============================
+FAIL!  : QtEngineContractTest::qtDarkensAPageWithNoDarkThemeAndLeavesADarkOneAlone() Compared values are not the same
+   Actual   (show("/bare"))           : #ff1b1b1b
+   Expected (QColor(0x12, 0x12, 0x12)): #ff121212
+   Loc: [<checkout>/tests/engine/tst_qtenginecontract.cpp(3309)]
+FAIL!  : QtEngineContractTest::qtLeavesAClassBasedDarkThemeAsWritten() Compared values are not the same
+FAIL!  : QtEngineContractTest::qtLeavesAClassBasedDarkThemeAsWritten() Compared values are not the same
+   Actual   (pageAreaColour(shown.window)): #ff1b1b1b
+   Expected (QColor(0x12, 0x12, 0x12))    : #ff121212
+   Loc: [<checkout>/tests/engine/tst_qtenginecontract.cpp(3489)]
+FAIL!  : QtEngineContractTest::qtStartsEachDocumentDarkenedAfterAPageLeftAlone() Compared values are not the same
+FAIL!  : QtEngineContractTest::qtStartsEachDocumentDarkenedAfterAPageLeftAlone() Compared values are not the same
+   Actual   (pageAreaColour(shown.window)): #ff1b1b1b
+   Expected (QColor(0x12, 0x12, 0x12))    : #ff121212
+   Loc: [<checkout>/tests/engine/tst_qtenginecontract.cpp(3855)]
+FAIL!  : QtEngineContractTest::qtKeepsAWhitePageDarkenedUnderAModalBackdrop() Compared values are not the same
+FAIL!  : QtEngineContractTest::qtKeepsAWhitePageDarkenedUnderAModalBackdrop() Compared values are not the same
+   Actual   (pageAreaColour(page.shown.window, QPoint(320, 240))): #ff1b1b1b
+   Expected (QColor(0x12, 0x12, 0x12))                           : #ff121212
+   Loc: [<checkout>/tests/engine/tst_qtenginecontract.cpp(3653)]
+PASS   : QtEngineContractTest::cleanupTestCase()
+Totals: 2 passed, 4 failed, 0 skipped, 0 blacklisted, 51835ms
+
+Performance checks with normal caching/performance cores
+========================================================
+FAIL!  : omaweb_ui::PerformanceProbes::test_aSpaceSwitchSlidesInsideTheFrameBudget() 'space-switch-frame-interval-held-movements measured 7.0 movements, threshold 1.0 movements' returned FALSE. ()
+   Loc: [<checkout>/tests/ui-performance/tst_performance.qml(77)]
+QWARN  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() file://<checkout>/src/ui/TabEngineHost.qml:1633: TypeError: Cannot read property 'pageFocusAllowed' of undefined (exception occurred during delayed function evaluation)
+QINFO  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() qml: tab switches: fastest 4.5 ms, slowest 16.0 ms
+QINFO  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() probe tab-switch-to-page-frame: 7.7 ms (threshold 50.0 ms)
+FAIL!  : omaweb_ui::PerformanceProbes::test_theOmnibarOpensAndFiltersInsideTheFrameBudget() 'omnibar-frame-interval-held-movements measured 4.0 movements, threshold 1.0 movements' returned FALSE. ()
+   Loc: [<checkout>/tests/ui-performance/tst_performance.qml(77)]
+QINFO  : omaweb_ui::PerformanceProbes::test_theShortcutSheetOpensInsideTheFrameBudget() qml: shortcut-sheet-opening: slowest by opening first 28, start page 28, page 25, start page 24, page 22, start page 19, page 21, start page 20, page 26, start page 30, page 24 ms
+QINFO  : omaweb_ui::PerformanceProbes::test_theShortcutSheetOpensInsideTheFrameBudget() probe shortcut-sheet-held-openings: 0.0 openings (threshold 1.0 openings)
+PASS   : omaweb_ui::PerformanceProbes::test_theShortcutSheetOpensInsideTheFrameBudget()
+Totals: 10 passed, 2 failed, 0 skipped, 0 blacklisted, 24684ms
+FAIL!  : omaweb_ui::PerformanceProbes::test_aSpaceSwitchSlidesInsideTheFrameBudget() 'space-switch-frame-interval-held-movements measured 2.0 movements, threshold 1.0 movements' returned FALSE. ()
+   Loc: [<checkout>/tests/ui-performance/tst_performance.qml(77)]
+QWARN  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() file://<checkout>/src/ui/TabEngineHost.qml:1633: TypeError: Cannot read property 'pageFocusAllowed' of undefined (exception occurred during delayed function evaluation)
+QINFO  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() qml: tab switches: fastest 4.3 ms, slowest 16.2 ms
+QINFO  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() probe tab-switch-to-page-frame: 7.2 ms (threshold 50.0 ms)
+Totals: 11 passed, 1 failed, 0 skipped, 0 blacklisted, 25009ms
+0% tests passed, 2 tests failed out of 2
+Total Test time (real) =  50.64 sec
+
+Untouched UI plain performance control
+======================================
+FAIL!  : omaweb_ui::PerformanceProbes::test_aSpaceSwitchSlidesInsideTheFrameBudget() 'space-switch-frame-interval measured 34.8 ms, threshold 33.3 ms' returned FALSE. ()
+   Loc: [<isolated-copy>/tests/ui-performance/tst_performance.qml(77)]
+QWARN  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() file://<isolated-copy>/src/ui/TabEngineHost.qml:1624: TypeError: Cannot read property 'pageFocusAllowed' of undefined (exception occurred during delayed function evaluation)
+QINFO  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() qml: tab switches: fastest 5.3 ms, slowest 15.8 ms
+QINFO  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() probe tab-switch-to-page-frame: 7.9 ms (threshold 50.0 ms)
+FAIL!  : omaweb_ui::PerformanceProbes::test_theOmnibarOpensAndFiltersInsideTheFrameBudget() 'omnibar-frame-interval-held-movements measured 3.0 movements, threshold 1.0 movements' returned FALSE. ()
+   Loc: [<isolated-copy>/tests/ui-performance/tst_performance.qml(77)]
+QINFO  : omaweb_ui::PerformanceProbes::test_theShortcutSheetOpensInsideTheFrameBudget() qml: shortcut-sheet-opening: slowest by opening first 27, start page 20, page 21, start page 33, page 23, start page 23, page 18, start page 33, page 23, start page 20, page 31 ms
+QINFO  : omaweb_ui::PerformanceProbes::test_theShortcutSheetOpensInsideTheFrameBudget() probe shortcut-sheet-held-openings: 0.0 openings (threshold 1.0 openings)
+PASS   : omaweb_ui::PerformanceProbes::test_theShortcutSheetOpensInsideTheFrameBudget()
+Totals: 10 passed, 2 failed, 0 skipped, 0 blacklisted, 24352ms
+
+Untouched UI themed performance control
+=======================================
+FAIL!  : omaweb_ui::PerformanceProbes::test_aSpaceSwitchSlidesInsideTheFrameBudget() 'space-switch-frame-interval-held-movements measured 7.0 movements, threshold 1.0 movements' returned FALSE. ()
+   Loc: [<isolated-copy>/tests/ui-performance/tst_performance.qml(77)]
+QWARN  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() file://<isolated-copy>/src/ui/TabEngineHost.qml:1624: TypeError: Cannot read property 'pageFocusAllowed' of undefined (exception occurred during delayed function evaluation)
+QINFO  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() qml: tab switches: fastest 4.4 ms, slowest 16.2 ms
+QINFO  : omaweb_ui::PerformanceProbes::test_aTabSwitchDrawsTheDestinationInsideItsBudget() probe tab-switch-to-page-frame: 7.3 ms (threshold 50.0 ms)
+Totals: 11 passed, 1 failed, 0 skipped, 0 blacklisted, 24225ms
