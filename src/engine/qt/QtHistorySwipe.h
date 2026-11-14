@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QWheelEvent>
 
+#include <deque>
 #include <memory>
 #include <vector>
 
@@ -23,8 +24,10 @@ class QtHistorySwipe : public QObject {
     Q_PROPERTY(qreal progress READ progress NOTIFY progressChanged)
 
 public:
-    static constexpr qreal axisLock = 10;
+    static constexpr qreal axisLock = 6;
     static constexpr qreal distance = 120;
+    static constexpr qreal flickSpeed = 1000;
+    static constexpr quint64 speedWindow = 100;
     static constexpr int queryTimeout = 150;
     static constexpr int lostRelease = 1000;
 
@@ -50,10 +53,15 @@ protected:
 
 private:
     enum class State { Idle, Tracking, Passing, Querying, Navigating, Settled };
+    struct Sample {
+        quint64 at;
+        qreal offset;
+    };
     void replay();
     void endPage();
     void consume(const QWheelEvent &event);
     void setProgress(qreal value);
+    qreal speedAt(quint64 at) const;
 
     QMetaObject::Connection m_pageVisibility;
     QMetaObject::Connection m_pageDestroyed;
@@ -67,6 +75,7 @@ private:
     bool m_replaying = false;
     State m_state = State::Idle;
     QPointF m_travel;
+    std::deque<Sample> m_samples;
     qreal m_progress = 0;
     int m_direction = 0;
     int m_request = 0;

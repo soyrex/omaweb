@@ -26,6 +26,12 @@ class QtHistorySwipeTest final : public QObject {
     Q_OBJECT
 private slots:
     void init();
+    void axisLock();
+    void verticalAxisLock();
+    void diagonalAxisLock();
+    void flick_data();
+    void flick();
+    void flickSamplesReset();
     void direction_data();
     void direction();
     void belowThresholdAndReversal();
@@ -46,8 +52,8 @@ private slots:
     void destructionCancels();
 
 private:
-    void wheel(
-        Qt::ScrollPhase phase, QPoint delta = {}, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
+    void wheel(Qt::ScrollPhase phase, QPoint delta = {},
+        Qt::KeyboardModifiers modifiers = Qt::NoModifier, qint64 elapsed = 200);
     void begin();
     omaweb::QtHistorySwipe swipe;
     QQuickWindow window;
@@ -55,12 +61,14 @@ private:
     probe::RenderWidgetHostViewQtDelegateItem page;
 };
 
-void QtHistorySwipeTest::wheel(Qt::ScrollPhase phase, QPoint delta, Qt::KeyboardModifiers modifiers)
+void QtHistorySwipeTest::wheel(
+    Qt::ScrollPhase phase, QPoint delta, Qt::KeyboardModifiers modifiers, qint64 elapsed)
 {
     static quint64 time = 0;
     QWheelEvent event(QPointF(40, 40), QPointF(140, 140), delta, delta * 12, Qt::NoButton,
         modifiers, phase, false, Qt::MouseEventSynthesizedBySystem);
-    event.setTimestamp(++time);
+    time += elapsed;
+    event.setTimestamp(time);
     QCoreApplication::sendEvent(&page, &event);
 }
 
@@ -81,6 +89,91 @@ void QtHistorySwipeTest::init()
     swipe.setProperty("enabled", true);
     swipe.setProperty("canGoBack", true);
     swipe.setProperty("canGoForward", true);
+}
+
+void QtHistorySwipeTest::axisLock()
+{
+    QSignalSpy query(&swipe, &omaweb::QtHistorySwipe::queryNeeded);
+    begin();
+    wheel(Qt::ScrollUpdate, {5, 0});
+    QCOMPARE(query.size(), 0);
+    wheel(Qt::ScrollUpdate, {1, 0});
+    QCOMPARE(query.size(), 1);
+}
+
+void QtHistorySwipeTest::verticalAxisLock()
+{
+    QSignalSpy query(&swipe, &omaweb::QtHistorySwipe::queryNeeded);
+    begin();
+    wheel(Qt::ScrollUpdate, {6, 6});
+    wheel(Qt::ScrollUpdate, {130, 0});
+    QCOMPARE(query.size(), 0);
+}
+
+void QtHistorySwipeTest::diagonalAxisLock()
+{
+    QSignalSpy query(&swipe, &omaweb::QtHistorySwipe::queryNeeded);
+    begin();
+    wheel(Qt::ScrollUpdate, {5, 5});
+    QCOMPARE(query.size(), 0);
+    wheel(Qt::ScrollUpdate, {1, 0});
+    QCOMPARE(query.size(), 1);
+    swipe.resolve(query.first().first().toInt(), true);
+    wheel(Qt::ScrollUpdate, {0, 10});
+    QVERIFY(swipe.progress() > 0);
+}
+
+void QtHistorySwipeTest::flick_data()
+{
+    QTest::addColumn<int>("sign");
+    QTest::addColumn<int>("secondDelta");
+    QTest::addColumn<qint64>("elapsed");
+    QTest::addColumn<quint64>("releaseDelay");
+    QTest::addColumn<bool>("commits");
+    QTest::newRow("fast back") << 1 << 21 << qint64(20) << quint64(1) << true;
+    QTest::newRow("fast forward") << -1 << 21 << qint64(20) << quint64(1) << true;
+    QTest::newRow("exact speed") << 1 << 20 << qint64(20) << quint64(1) << false;
+    QTest::newRow("slow") << 1 << 19 << qint64(20) << quint64(1) << false;
+    QTest::newRow("rest before release") << 1 << 21 << qint64(20) << quint64(101) << false;
+    QTest::newRow("reverse") << 1 << -21 << qint64(20) << quint64(1) << false;
+    QTest::newRow("same timestamp") << 1 << 21 << qint64(0) << quint64(1) << false;
+    QTest::newRow("backward timestamp") << 1 << 21 << qint64(-1) << quint64(2) << false;
+}
+
+void QtHistorySwipeTest::flick()
+{
+    QFETCH(int, sign);
+    QFETCH(int, secondDelta);
+    QFETCH(qint64, elapsed);
+    QFETCH(quint64, releaseDelay);
+    QFETCH(bool, commits);
+    QSignalSpy query(&swipe, &omaweb::QtHistorySwipe::queryNeeded);
+    QSignalSpy navigation(&swipe, &omaweb::QtHistorySwipe::navigate);
+    begin();
+    wheel(Qt::ScrollUpdate, {30 * sign, 0});
+    QCOMPARE(query.size(), 1);
+    swipe.resolve(query.first().first().toInt(), true);
+    wheel(Qt::ScrollUpdate, {secondDelta * sign, 0}, Qt::NoModifier, elapsed);
+    wheel(Qt::ScrollEnd, {}, Qt::NoModifier, releaseDelay);
+    QCOMPARE(navigation.size(), commits ? 1 : 0);
+    if (commits)
+        QCOMPARE(navigation.first().first().toInt(), -sign);
+}
+
+void QtHistorySwipeTest::flickSamplesReset()
+{
+    QSignalSpy query(&swipe, &omaweb::QtHistorySwipe::queryNeeded);
+    QSignalSpy navigation(&swipe, &omaweb::QtHistorySwipe::navigate);
+    begin();
+    wheel(Qt::ScrollUpdate, {10, 0});
+    swipe.resolve(query.first().first().toInt(), true);
+    wheel(Qt::ScrollEnd, {}, Qt::NoModifier, 1);
+    wheel(Qt::ScrollBegin, {}, Qt::NoModifier, 1);
+    wheel(Qt::ScrollUpdate, {40, 0}, Qt::NoModifier, 1);
+    QCOMPARE(query.size(), 2);
+    swipe.resolve(query.last().first().toInt(), true);
+    wheel(Qt::ScrollEnd, {}, Qt::NoModifier, 1);
+    QCOMPARE(navigation.size(), 0);
 }
 
 void QtHistorySwipeTest::direction_data()

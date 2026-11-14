@@ -81,6 +81,7 @@ void QtHistorySwipe::cancel()
     m_last.reset();
     m_page.clear();
     m_travel = {};
+    m_samples.clear();
     setProgress(0);
 }
 
@@ -142,6 +143,13 @@ void QtHistorySwipe::consume(const QWheelEvent &event)
         delta = QPointF(event.angleDelta()) / 12.0;
     }
     m_travel += delta;
+    if (!delta.isNull()) {
+        m_samples.push_back({event.timestamp(), m_travel.x()});
+        while (m_samples.size() > 1 && event.timestamp() >= m_samples.front().at
+            && event.timestamp() - m_samples.front().at > speedWindow) {
+            m_samples.pop_front();
+        }
+    }
     // Reversing towards the starting point cancels the swipe rather than arming the other way.
     const qreal along = std::max(0.0, m_travel.x() * -m_direction);
     setProgress(-m_direction * std::min(1.25, along / distance));
@@ -149,10 +157,23 @@ void QtHistorySwipe::consume(const QWheelEvent &event)
         m_timeout.stop();
         m_state = State::Settled;
         setProgress(0);
-        if (along >= distance && (m_direction < 0 ? m_canGoBack : m_canGoForward)) {
+        const qreal speed = speedAt(event.timestamp());
+        const bool flicked = along > 0 && speed * -m_direction > flickSpeed;
+        if ((along >= distance || flicked) && (m_direction < 0 ? m_canGoBack : m_canGoForward)) {
             emit navigate(m_direction);
         }
     }
+}
+
+qreal QtHistorySwipe::speedAt(quint64 at) const
+{
+    const auto from = std::find_if(m_samples.cbegin(), m_samples.cend(),
+        [at](const Sample &sample) { return sample.at <= at && at - sample.at <= speedWindow; });
+    if (from == m_samples.cend() || m_samples.back().at <= from->at || m_samples.back().at > at) {
+        return 0;
+    }
+    const auto &to = m_samples.back();
+    return (to.offset - from->offset) * 1000.0 / static_cast<qreal>(to.at - from->at);
 }
 
 bool QtHistorySwipe::eventFilter(QObject *watched, QEvent *event)
@@ -227,8 +248,8 @@ bool QtHistorySwipe::eventFilter(QObject *watched, QEvent *event)
         delta = QPointF(wheel->angleDelta()) / 12.0;
     }
     m_travel += delta;
-    const bool across = std::abs(m_travel.x()) >= axisLock
-        && std::abs(m_travel.x()) >= 1.5 * std::abs(m_travel.y());
+    const bool across
+        = std::abs(m_travel.x()) >= axisLock && std::abs(m_travel.x()) > std::abs(m_travel.y());
     if (!across && std::abs(m_travel.y()) >= axisLock) {
         m_state = State::Passing;
         return false;
