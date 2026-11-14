@@ -2,6 +2,7 @@
 #include "AgentCommand.h"
 #include "AgentConsole.h"
 #include "ContentBlocker.h"
+#include "SiteStyles.h"
 #include "QtCookiePolicy.h"
 #include "QtDiagnosticOverrides.h"
 #include "QtDrawnFavicons.h"
@@ -14,6 +15,7 @@
 #include "GlobalPrivacyControl.h"
 #include "HttpsOnly.h"
 #include "QtAgentInput.h"
+#include "QtPageScripts.h"
 #include "QtCertificates.h"
 #include "QtContentBlocker.h"
 #include "QtEnginePaths.h"
@@ -59,6 +61,7 @@ void setDnsAliasResolverForTesting(DnsAliasResolverForTesting resolver);
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QFile>
 #include <QFontDatabase>
 #include <QJSValue>
@@ -298,6 +301,11 @@ private slots:
     void qtHidesCosmeticRulesBeforeThePageRuns_data();
     void qtHidesCosmeticRulesBeforeThePageRuns();
     void qtScriptsEveryDocumentForItsOwnAddress();
+    void qtStylesAPageWithTheReadersSiteStyle();
+    void qtPicksAnElementToHide();
+    void qtCountsAndPreviewsWhatAStyleHides();
+    void qtKeepsPickingThroughALoadThatLeavesTheDocument();
+    void qtNamesATagThatIsNoIdentifierByItself();
     void qtRejectsObsoleteCosmeticSurveys_data();
     void qtRejectsObsoleteCosmeticSurveys();
     void qtSurveysAgainForAChangeWhileThePageLoads_data();
@@ -2467,6 +2475,13 @@ public:
                     socket->disconnectFromHost();
                     return;
                 }
+                // A navigation that answers with nothing leaves the page as it was.
+                if (path == "/no-content") {
+                    socket->write("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n"
+                                  "Connection: close\r\n\r\n");
+                    socket->disconnectFromHost();
+                    return;
+                }
                 // A service worker's script is refused unless it is served as script.
                 if (path == "/worker.js") {
                     socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\n"
@@ -3270,6 +3285,17 @@ bool isWhite(const QColor &colour)
     return colour.red() > 230 && colour.green() > 230 && colour.blue() > 230;
 }
 
+// A white ground as the engine darkens it: a neutral grey from #121212 to #1b1b1b. Chromium inverts
+// white to #1b1b1b and moves a grey that dark to #121212 only when its channels are equal to within
+// a float's epsilon. The aarch64 engine is built with GCC, which fuses multiplies and adds, and its
+// channels land further apart than that, so there white stays #1b1b1b (#936,
+// villekivela/omaweb-qtwebengine-patches#34).
+bool isDarkenedWhite(const QColor &colour)
+{
+    return colour.red() == colour.green() && colour.red() == colour.blue() && colour.red() >= 0x12
+        && colour.red() <= 0x1b;
+}
+
 } // namespace
 
 // Chromium's forced dark mode draws a page that brings no dark theme of its own
@@ -3306,7 +3332,8 @@ void QtEngineContractTest::qtDarkensAPageWithNoDarkThemeAndLeavesADarkOneAlone()
     QCOMPARE(show("/declared"), QColor(0x33, 0x44, 0x55));
 
     shown.adapter->setProperty("darkenPage", true);
-    QCOMPARE(show("/bare"), QColor(0x12, 0x12, 0x12));
+    const QColor bare = show("/bare");
+    QVERIFY2(isDarkenedWhite(bare), qPrintable(bare.name()));
     QVERIFY(isDark(show("/light")));
     QCOMPARE(show("/declared"), QColor(0x33, 0x44, 0x55));
     // Under a light scheme, a page that allows both schemes has not declared a
@@ -3486,7 +3513,8 @@ void QtEngineContractTest::qtLeavesAClassBasedDarkThemeAsWritten()
         // The class goes, and the page is darkened again.
         runInPage(shown, QStringLiteral("document.documentElement.classList.remove('dark')"));
         QTRY_VERIFY_WITH_TIMEOUT(isDark(blockColour(shown.window)), 5000);
-        QTRY_COMPARE_WITH_TIMEOUT(pageAreaColour(shown.window), QColor(0x12, 0x12, 0x12), 5000);
+        QTRY_VERIFY2_WITH_TIMEOUT(isDarkenedWhite(pageAreaColour(shown.window)),
+            qPrintable(pageAreaColour(shown.window).name()), 5000);
         // And back.
         runInPage(shown, QStringLiteral("document.documentElement.classList.add('dark')"));
         QTRY_COMPARE_WITH_TIMEOUT(blockColour(shown.window), zinc300, 5000);
@@ -3650,8 +3678,8 @@ void QtEngineContractTest::qtKeepsAWhitePageDarkenedUnderAModalBackdrop()
     QVERIFY2(isDark(pageAreaColour(page.shown.window, QPoint(320, 240))),
         qPrintable(pageAreaColour(page.shown.window, QPoint(320, 240)).name()));
     runInPage(page.shown, QStringLiteral("m.style.display = 'none'"));
-    QTRY_COMPARE_WITH_TIMEOUT(
-        pageAreaColour(page.shown.window, QPoint(320, 240)), QColor(0x12, 0x12, 0x12), 5000);
+    QTRY_VERIFY2_WITH_TIMEOUT(isDarkenedWhite(pageAreaColour(page.shown.window, QPoint(320, 240))),
+        qPrintable(pageAreaColour(page.shown.window, QPoint(320, 240)).name()), 5000);
     QTest::qWait(500);
     runInPage(page.shown, QStringLiteral("m.style.display = 'block'"));
     QTest::qWait(1000);
@@ -3852,7 +3880,8 @@ void QtEngineContractTest::qtStartsEachDocumentDarkenedAfterAPageLeftAlone()
     });
     sampler.start(15);
     shown.adapter->setProperty("currentUrl", server.url("/white"));
-    QTRY_COMPARE_WITH_TIMEOUT(pageAreaColour(shown.window), QColor(0x12, 0x12, 0x12), 5000);
+    QTRY_VERIFY2_WITH_TIMEOUT(isDarkenedWhite(pageAreaColour(shown.window)),
+        qPrintable(pageAreaColour(shown.window).name()), 5000);
     QTest::qWait(500);
     sampler.stop();
     QVERIFY2(samples > 20, qPrintable(QString::number(samples)));
@@ -4483,6 +4512,393 @@ void QtEngineContractTest::qtHidesCosmeticRulesBeforeThePageRuns()
     contentBlocker.setSiteEnabled(pageUrl, true);
     QTRY_COMPARE_WITH_TIMEOUT(
         adapter->property("pageTitle").toString().section('|', 1, 1), QStringLiteral("SG-"), 15000);
+}
+
+// The reader's own sheet for a site is in the document before the page's own
+// script runs, under a policy that refuses inline style, and with Content
+// blocking off for the site: a style is the reader's, not the blocker's. A
+// saved edit, a removed file and a view whose styles are taken away restyle
+// the open page, never reloading it.
+void QtEngineContractTest::qtStylesAPageWithTheReadersSiteStyle()
+{
+    const QByteArray body(R"HTML(<!doctype html><html><head>
+        <meta http-equiv="Content-Security-Policy"
+              content="default-src 'self'; script-src 'unsafe-inline'">
+        </head><body>
+        <p id="text">text</p>
+        <script>
+            const colour = () => getComputedStyle(document.getElementById("text")).color;
+            const first = colour();
+            const report = () => {
+                document.title = performance.timeOrigin + "|" + first + "|" + colour();
+                requestAnimationFrame(report);
+            };
+            report();
+        </script>
+    </body></html>)HTML");
+    PageServer server(body);
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    const QUrl pageUrl(QStringLiteral("http://127.0.0.1:%1/page.html").arg(server.serverPort()));
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const auto configRoot = root.filePath(QStringLiteral("config"));
+    const auto stylePath = root.filePath(QStringLiteral("config/styles/127.0.0.1.css"));
+    const auto writeStyle = [&stylePath](const QByteArray &css) {
+        QDir().mkpath(QFileInfo(stylePath).absolutePath());
+        QSaveFile file(stylePath);
+        return file.open(QIODevice::WriteOnly) && file.write(css) == css.size() && file.commit();
+    };
+    QVERIFY(writeStyle("#text { color: rgb(255, 0, 0); }"));
+    omaweb::SiteStyles siteStyles(configRoot);
+    omaweb::ContentBlocker contentBlocker(root.path(), omaweb::ContentBlocker::DefaultLists::None);
+    QTRY_VERIFY_WITH_TIMEOUT(!contentBlocker.compiling(), 5000);
+    contentBlocker.setSiteEnabled(pageUrl, false);
+
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl::fromLocalFile(QStringLiteral(OMAWEB_QT_ENGINE_VIEW_PATH)));
+    const std::unique_ptr<QObject> adapter(component.createWithInitialProperties({
+        {QStringLiteral("profilePath"), root.filePath(QStringLiteral("profile"))},
+        {QStringLiteral("contentBlocker"), QVariant::fromValue<QObject *>(&contentBlocker)},
+        {QStringLiteral("siteStyles"), QVariant::fromValue<QObject *>(&siteStyles)},
+    }));
+    QVERIFY2(adapter, qPrintable(component.errorString()));
+    QQuickWindow window;
+    qobject_cast<QQuickItem *>(adapter.get())->setParentItem(window.contentItem());
+    window.show();
+
+    const auto title = [&adapter] { return adapter->property("pageTitle").toString(); };
+    const auto drawn = [&title] { return title().section('|', 2, 2); };
+    QVERIFY(adapter->setProperty("currentUrl", pageUrl));
+    QTRY_COMPARE_WITH_TIMEOUT(
+        title().section('|', 1), QStringLiteral("rgb(255, 0, 0)|rgb(255, 0, 0)"), 15000);
+    const auto document = title().section('|', 0, 0);
+
+    QVERIFY(writeStyle("#text { color: rgb(0, 0, 255); }"));
+    QTRY_COMPARE_WITH_TIMEOUT(drawn(), QStringLiteral("rgb(0, 0, 255)"), 15000);
+    QVERIFY(adapter->setProperty("siteStyles", QVariant::fromValue<QObject *>(nullptr)));
+    QTRY_COMPARE_WITH_TIMEOUT(drawn(), QStringLiteral("rgb(0, 0, 0)"), 15000);
+    QVERIFY(adapter->setProperty("siteStyles", QVariant::fromValue<QObject *>(&siteStyles)));
+    QTRY_COMPARE_WITH_TIMEOUT(drawn(), QStringLiteral("rgb(0, 0, 255)"), 15000);
+    QVERIFY(QFile::remove(stylePath));
+    QTRY_COMPARE_WITH_TIMEOUT(drawn(), QStringLiteral("rgb(0, 0, 0)"), 15000);
+    QCOMPARE(title().section('|', 0, 0), document);
+}
+
+// The Site style panel's picker. A click picks the element under it and the
+// page's elements never hear the click. The selector prefers an id, then classes that
+// are not generated, and widens from the element to all related ones. The
+// keys move the pick and hide it, and a selector the reader edits is counted.
+void QtEngineContractTest::qtPicksAnElementToHide()
+{
+    PageServer server(R"HTML(<!doctype html><html><head><title>ready</title></head>
+        <body style="margin:0" onclick="document.title = 'clicked'">
+        <main id="feed">
+          <article class="post" style="position:absolute;left:0;top:0;width:300px;height:100px">
+            <p>one</p>
+            <aside class="promo sc-a1b2c3"
+                   style="position:absolute;left:200px;top:10px;width:80px;height:40px">ad</aside>
+          </article>
+          <article class="post" style="position:absolute;left:0;top:120px;width:300px;height:100px">
+            <p>two</p>
+            <aside class="promo sc-d4e5f6"
+                   style="position:absolute;left:200px;top:10px;width:80px;height:40px">ad</aside>
+          </article>
+          <article class="post" style="position:absolute;left:0;top:240px;width:300px;height:100px">
+            <p>three</p>
+          </article>
+        </main>
+        <div id="cookie-banner"
+             style="position:absolute;left:0;top:400px;width:200px;height:40px">cookies</div>
+        <section style="position:absolute;left:320px;top:0;width:200px;height:100px">
+          <button data-testid="share" style="width:80px;height:30px">share</button>
+        </section>
+        <div style="position:absolute;left:320px;top:200px;width:200px;height:100px">
+          <span style="display:block;height:30px">a</span>
+          <span style="display:block;height:30px">b</span>
+        </div>
+    </body></html>)HTML");
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl::fromLocalFile(QStringLiteral(OMAWEB_QT_ENGINE_VIEW_PATH)));
+    const std::unique_ptr<QObject> adapter(component.createWithInitialProperties({
+        {QStringLiteral("profilePath"), root.filePath(QStringLiteral("profile"))},
+    }));
+    QVERIFY2(adapter, qPrintable(component.errorString()));
+    QQuickWindow window;
+    window.resize(600, 600);
+    auto *view = qobject_cast<QQuickItem *>(adapter.get());
+    view->setParentItem(window.contentItem());
+    view->setSize(QSizeF(600, 600));
+    window.show();
+    auto *webView = adapter->findChild<QQuickItem *>(QStringLiteral("qtWebView"));
+    QVERIFY(webView);
+    omaweb::QtAgentInput input;
+
+    QVERIFY(adapter->setProperty(
+        "currentUrl", QUrl(QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort()))));
+    QTRY_COMPARE_WITH_TIMEOUT(
+        adapter->property("pageTitle").toString(), QStringLiteral("ready"), 15000);
+    const auto pick = [&adapter] { return adapter->property("pick").toMap(); };
+    const auto selector = [&pick] { return pick().value(QStringLiteral("selector")).toString(); };
+    const auto count = [&pick] { return pick().value(QStringLiteral("count")).toInt(); };
+    QSignalSpy hidden(adapter.get(), SIGNAL(pickHidden(QString)));
+
+    // The picker says so once it runs in the page, before which a click is
+    // the page's.
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "startPicking"));
+    QVERIFY(adapter->property("picking").toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(pick().contains(QStringLiteral("levels")), 5000);
+    // Hovering highlights what is under the pointer, and a click picks it.
+    QTest::mouseMove(&window, QPoint(100, 420));
+    QTRY_COMPARE_WITH_TIMEOUT(selector(), QStringLiteral("#cookie-banner"), 5000);
+    QVERIFY(input.click(webView, QPointF(100, 420)));
+    QTRY_COMPARE_WITH_TIMEOUT(selector(), QStringLiteral("#cookie-banner"), 5000);
+    QCOMPARE(count(), 1);
+
+    // An element with no id or class of its own is named by an attribute that
+    // says what it is, and one with nothing to tell it from its siblings by
+    // its place among them.
+    QVERIFY(input.click(webView, QPointF(350, 15)));
+    QTRY_VERIFY_WITH_TIMEOUT(selector().contains(QStringLiteral("[data-testid=\"share\"]")), 5000);
+    QCOMPARE(count(), 1);
+    QVERIFY(input.click(webView, QPointF(350, 245)));
+    QTRY_VERIFY_WITH_TIMEOUT(selector().contains(QStringLiteral(":nth-child(2)")), 5000);
+    QCOMPARE(count(), 1);
+
+    QVERIFY(input.click(webView, QPointF(240, 30)));
+    QTRY_VERIFY_WITH_TIMEOUT(selector().contains(QStringLiteral("promo")), 5000);
+    QVERIFY2(!selector().contains(QStringLiteral("sc-")), qPrintable(selector()));
+    QCOMPARE(count(), 1);
+    QVERIFY(pick().value(QStringLiteral("levels")).toInt() >= 2);
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "widenPick", Q_ARG(QVariant, 1)));
+    QTRY_COMPARE_WITH_TIMEOUT(count(), 2, 5000);
+    QCOMPARE(pick().value(QStringLiteral("level")).toInt(), 1);
+
+    QVERIFY(QMetaObject::invokeMethod(
+        adapter.get(), "movePick", Q_ARG(QVariant, QStringLiteral("parent"))));
+    QTRY_VERIFY_WITH_TIMEOUT(!selector().contains(QStringLiteral("promo")), 5000);
+    QCOMPARE(count(), 1);
+    QCOMPARE(pick().value(QStringLiteral("level")).toInt(), 0);
+    QVERIFY(QMetaObject::invokeMethod(
+        adapter.get(), "movePick", Q_ARG(QVariant, QStringLiteral("child"))));
+    QTRY_VERIFY_WITH_TIMEOUT(selector().contains(QStringLiteral("promo")), 5000);
+
+    // The keys are the picker's while it picks, and the page's elements hear
+    // none.
+    QVERIFY(input.pressKey(webView, QStringLiteral("ArrowUp")));
+    QTRY_VERIFY_WITH_TIMEOUT(!selector().contains(QStringLiteral("promo")), 5000);
+    const auto article = selector();
+    QVERIFY(input.pressKey(webView, QStringLiteral("ArrowRight")));
+    QTRY_VERIFY_WITH_TIMEOUT(selector() != article && count() == 1, 5000);
+    QVERIFY(input.pressKey(webView, QStringLiteral("ArrowLeft")));
+    QTRY_COMPARE_WITH_TIMEOUT(selector(), article, 5000);
+    QVERIFY(input.pressKey(webView, QStringLiteral("]")));
+    QTRY_COMPARE_WITH_TIMEOUT(count(), 3, 5000);
+    const auto widened = selector();
+    QVERIFY(input.pressKey(webView, QStringLiteral("Enter")));
+    QTRY_COMPARE_WITH_TIMEOUT(hidden.count(), 1, 5000);
+    QCOMPARE(hidden.at(0).at(0).toString(), widened);
+    QTRY_VERIFY_WITH_TIMEOUT(!adapter->property("picking").toBool(), 5000);
+    QCOMPARE(adapter->property("pageTitle").toString(), QStringLiteral("ready"));
+
+    // A selector the reader writes is counted as it stands, and one that does
+    // not parse matches nothing.
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "startPicking"));
+    QTRY_VERIFY_WITH_TIMEOUT(pick().contains(QStringLiteral("levels")), 5000);
+    QVERIFY(QMetaObject::invokeMethod(
+        adapter.get(), "setPickSelector", Q_ARG(QVariant, QStringLiteral("article p"))));
+    QTRY_COMPARE_WITH_TIMEOUT(count(), 3, 5000);
+    QVERIFY(QMetaObject::invokeMethod(
+        adapter.get(), "setPickSelector", Q_ARG(QVariant, QStringLiteral("article["))));
+    QTRY_VERIFY_WITH_TIMEOUT(!pick().value(QStringLiteral("valid")).toBool(), 5000);
+    QCOMPARE(count(), 0);
+    QVERIFY(input.pressKey(webView, QStringLiteral("Escape")));
+    QTRY_VERIFY_WITH_TIMEOUT(!adapter->property("picking").toBool(), 5000);
+    QCOMPARE(hidden.count(), 1);
+}
+
+// Each row the panel lists for a hidden element says how many it hides on the
+// page, and its preview shows them again, outlined, until it is let go.
+void QtEngineContractTest::qtCountsAndPreviewsWhatAStyleHides()
+{
+    PageServer server(R"HTML(<!doctype html><html><head><title>ready</title></head><body>
+        <div id="cookie-banner" style="display:flex">cookies</div>
+        <p class="note">one</p><p class="note">two</p>
+        <script>
+            const report = () => {
+                document.title = getComputedStyle(document.getElementById("cookie-banner")).display;
+                requestAnimationFrame(report);
+            };
+            addEventListener("load", report);
+        </script>
+    </body></html>)HTML");
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    const QUrl pageUrl(QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort()));
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    omaweb::SiteStyles siteStyles(root.filePath(QStringLiteral("config")));
+    QVERIFY(siteStyles.hide(QStringLiteral("127.0.0.1"), QStringLiteral("#cookie-banner")));
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl::fromLocalFile(QStringLiteral(OMAWEB_QT_ENGINE_VIEW_PATH)));
+    const std::unique_ptr<QObject> adapter(component.createWithInitialProperties({
+        {QStringLiteral("profilePath"), root.filePath(QStringLiteral("profile"))},
+        {QStringLiteral("siteStyles"), QVariant::fromValue<QObject *>(&siteStyles)},
+    }));
+    QVERIFY2(adapter, qPrintable(component.errorString()));
+    QQuickWindow window;
+    qobject_cast<QQuickItem *>(adapter.get())->setParentItem(window.contentItem());
+    window.show();
+
+    QVERIFY(adapter->setProperty("currentUrl", pageUrl));
+    QTRY_COMPARE_WITH_TIMEOUT(
+        adapter->property("pageTitle").toString(), QStringLiteral("none"), 15000);
+    // Every change below restyles the document on show: none loads another.
+    const auto generation = adapter->property("pageGeneration").toInt();
+
+    const QStringList selectors {QStringLiteral("#cookie-banner"), QStringLiteral(".note"),
+        QStringLiteral("p["), QStringLiteral("#gone")};
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "countHidden", Q_ARG(QVariant, selectors)));
+    const QVariantMap counted {{QStringLiteral("#cookie-banner"), 1}, {QStringLiteral(".note"), 2},
+        {QStringLiteral("p["), 0}, {QStringLiteral("#gone"), 0}};
+    QTRY_COMPARE_WITH_TIMEOUT(adapter->property("hiddenCounts").toMap(), counted, 5000);
+
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "previewHidden",
+        Q_ARG(QVariant, QStringLiteral("#cookie-banner")), Q_ARG(QVariant, true)));
+    QTRY_COMPARE_WITH_TIMEOUT(
+        adapter->property("pageTitle").toString(), QStringLiteral("flex"), 5000);
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "previewHidden",
+        Q_ARG(QVariant, QStringLiteral("#cookie-banner")), Q_ARG(QVariant, false)));
+    QTRY_COMPARE_WITH_TIMEOUT(
+        adapter->property("pageTitle").toString(), QStringLiteral("none"), 5000);
+
+    // Undoing the hide shows the element again, and hiding it again hides it.
+    QVERIFY(siteStyles.unhide(QStringLiteral("127.0.0.1"), QStringLiteral("#cookie-banner")));
+    QTRY_COMPARE_WITH_TIMEOUT(
+        adapter->property("pageTitle").toString(), QStringLiteral("flex"), 5000);
+    QVERIFY(siteStyles.hide(QStringLiteral("127.0.0.1"), QStringLiteral("#cookie-banner")));
+    QTRY_COMPARE_WITH_TIMEOUT(
+        adapter->property("pageTitle").toString(), QStringLiteral("none"), 5000);
+    QCOMPARE(adapter->property("pageGeneration").toInt(), generation);
+}
+
+// A load that answers with nothing, a download or another app's address
+// starts without replacing the document, and the picker in it is still
+// picking: still reported, and stopped when asked, so the page hears its
+// clicks again. A load that does replace it takes the picker with it.
+void QtEngineContractTest::qtKeepsPickingThroughALoadThatLeavesTheDocument()
+{
+    PageServer server(R"HTML(<!doctype html><html><head><title>ready</title></head>
+        <body style="margin:0" onclick="document.title = 'clicked'">
+        <div id="box" style="width:200px;height:100px">box</div>
+    </body></html>)HTML");
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    const QUrl pageUrl(QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort()));
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl::fromLocalFile(QStringLiteral(OMAWEB_QT_ENGINE_VIEW_PATH)));
+    const std::unique_ptr<QObject> adapter(component.createWithInitialProperties({
+        {QStringLiteral("profilePath"), root.filePath(QStringLiteral("profile"))},
+    }));
+    QVERIFY2(adapter, qPrintable(component.errorString()));
+    QQuickWindow window;
+    window.resize(400, 300);
+    auto *view = qobject_cast<QQuickItem *>(adapter.get());
+    view->setParentItem(window.contentItem());
+    view->setSize(QSizeF(400, 300));
+    window.show();
+    auto *webView = adapter->findChild<QQuickItem *>(QStringLiteral("qtWebView"));
+    QVERIFY(webView);
+    omaweb::QtAgentInput input;
+    const auto title = [&adapter] { return adapter->property("pageTitle").toString(); };
+    const auto pick = [&adapter] { return adapter->property("pick").toMap(); };
+
+    QVERIFY(adapter->setProperty("currentUrl", pageUrl));
+    QTRY_COMPARE_WITH_TIMEOUT(title(), QStringLiteral("ready"), 15000);
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "startPicking"));
+    QTRY_VERIFY_WITH_TIMEOUT(pick().contains(QStringLiteral("levels")), 5000);
+
+    QVERIFY(adapter->setProperty("currentUrl",
+        QUrl(QStringLiteral("http://127.0.0.1:%1/no-content").arg(server.serverPort()))));
+    QTRY_VERIFY_WITH_TIMEOUT(server.requested().contains(QStringLiteral("/no-content")), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!adapter->property("loading").toBool(), 5000);
+    QVERIFY(adapter->property("picking").toBool());
+    QVERIFY(input.click(webView, QPointF(50, 50)));
+    QTRY_COMPARE_WITH_TIMEOUT(
+        pick().value(QStringLiteral("selector")).toString(), QStringLiteral("#box"), 5000);
+    QCOMPARE(title(), QStringLiteral("ready"));
+
+    // The stop reaches the page as a script, beside the clicks rather than
+    // before them, so the page is clicked until it hears one.
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "stopPicking"));
+    QVERIFY(!adapter->property("picking").toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(
+        input.click(webView, QPointF(50, 50)) && title() == QStringLiteral("clicked"), 5000);
+
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "startPicking"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        adapter->property("pick").toMap().contains(QStringLiteral("levels")), 5000);
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "reloadPage"));
+    QTRY_VERIFY_WITH_TIMEOUT(!adapter->property("picking").toBool(), 15000);
+}
+
+// An HTML parser takes almost anything up to a space or `>` as a tag's name,
+// so a page can name one `x,body` or `p"q`. Written into a selector as it is,
+// the first would hide the whole body and the second would open a string the
+// rest of the file falls into. The picker escapes it.
+void QtEngineContractTest::qtNamesATagThatIsNoIdentifierByItself()
+{
+    PageServer server(R"HTML(<!doctype html><html><head><title>ready</title></head>
+        <body style="margin:0">
+        <x,body style="display:block;width:200px;height:50px">comma</x,body>
+        <p"q style="display:block;width:200px;height:50px;margin-top:100px">quote</p"q>
+    </body></html>)HTML");
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl::fromLocalFile(QStringLiteral(OMAWEB_QT_ENGINE_VIEW_PATH)));
+    const std::unique_ptr<QObject> adapter(component.createWithInitialProperties({
+        {QStringLiteral("profilePath"), root.filePath(QStringLiteral("profile"))},
+    }));
+    QVERIFY2(adapter, qPrintable(component.errorString()));
+    QQuickWindow window;
+    window.resize(400, 300);
+    auto *view = qobject_cast<QQuickItem *>(adapter.get());
+    view->setParentItem(window.contentItem());
+    view->setSize(QSizeF(400, 300));
+    window.show();
+    auto *webView = adapter->findChild<QQuickItem *>(QStringLiteral("qtWebView"));
+    QVERIFY(webView);
+    omaweb::QtAgentInput input;
+    const auto pick = [&adapter] { return adapter->property("pick").toMap(); };
+    const auto selector = [&pick] { return pick().value(QStringLiteral("selector")).toString(); };
+
+    QVERIFY(adapter->setProperty(
+        "currentUrl", QUrl(QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort()))));
+    QTRY_COMPARE_WITH_TIMEOUT(
+        adapter->property("pageTitle").toString(), QStringLiteral("ready"), 15000);
+    QVERIFY(QMetaObject::invokeMethod(adapter.get(), "startPicking"));
+    QTRY_VERIFY_WITH_TIMEOUT(pick().contains(QStringLiteral("levels")), 5000);
+
+    QVERIFY(input.click(webView, QPointF(50, 25)));
+    QTRY_COMPARE_WITH_TIMEOUT(selector(), QStringLiteral("x\\,body"), 5000);
+    QCOMPARE(pick().value(QStringLiteral("count")).toInt(), 1);
+    QVERIFY(input.click(webView, QPointF(50, 175)));
+    QTRY_COMPARE_WITH_TIMEOUT(selector(), QStringLiteral("p\\\"q"), 5000);
+    QCOMPARE(pick().value(QStringLiteral("count")).toInt(), 1);
 }
 
 // Every document a navigation creates runs the view's scripts and the
@@ -13490,6 +13906,7 @@ int main(int argc, char *argv[])
     omaweb::registerEngineBuild();
     omaweb::registerQtCertificates();
     omaweb::registerQtAgentInput();
+    omaweb::registerQtPageScripts();
     omaweb::QtPageGlide pageGlide;
     omaweb::registerQtPageGlide(&pageGlide);
     omaweb::registerQtHistorySwipe();

@@ -78,6 +78,19 @@ ApplicationWindow {
     readonly property real developerToolsMinimumWidth: 320
     readonly property real developerToolsMaximumWidth: Math.max(developerToolsMinimumWidth, Math.min(
                                                                     920, window.width * 0.6))
+    // Whether the reader asked for the Site style panel. It stands only where
+    // their styles apply, so not in an Agent Space, and comes back with the
+    // reader's Space. It stays open across navigation and tab switches.
+    property bool siteStylePanelOpen: false
+    readonly property bool siteStylesHere: window.readerSiteStyles !== null &&
+                                           !window.agentSpaceOnShow
+    // The command and the page menu offer the panel only for a page with a site
+    // a style can be written for, which a Start page or an IPv6 address has not.
+    readonly property bool siteStyleAvailable: window.siteStylesHere
+                                               && window.readerSiteStyles.siteFor(
+                                                   window.windowBrowser.activeUrl).length > 0
+    readonly property bool siteStylePanelShown: window.siteStylePanelOpen && window.siteStylesHere
+    readonly property int siteStylePanelWidth: 400
     readonly property real developerToolsDefaultWidth: 480
     property real developerToolsWidth: developerToolsDefaultWidth
     // The dock stands only for the tab on show, and only once the engine has
@@ -197,9 +210,22 @@ ApplicationWindow {
     // The Omnibar over a page. The Start page's Omnibar is the same one at
     // rest, and is open whenever the Start page is on show.
     property bool omnibarOpen: false
-    // A new-tab request shows the Start page over the page on show, which
-    // stays where it is until a destination is committed.
+    // A new-tab request over a page opens the Omnibar over it, heading to a
+    // new tab, unless the reader asked for the Start page instead.
+    property bool newTabShowsStartPage: false
+    // Whether the sidebar ends its tab list in a "+ New tab" row.
+    property bool sidebarNewTab: true
+    // With that setting on, a new-tab request shows the Start page over the
+    // page on show, which stays where it is until a destination is committed.
     property bool startPageSummoned: false
+    // A new tab's Omnibar or Start page is open and nothing is committed yet.
+    // The Start page that carries a committed destination while its page
+    // loads is past that, so this is narrower than `startPageShown`.
+    readonly property bool newTabStartPageWaits: (window.pagelessViewport
+                                                  || window.startPageSummoned) &&
+                                                 !window.settingsOpen && !window.historyOpen
+    readonly property bool newTabAwaited: (window.omnibarOpen && omnibar.newTabIntent)
+                                          || window.newTabStartPageWaits
     // A destination was committed from the Start page and the tab it went to
     // has not painted yet. The road is the loading state until it has, for up
     // to `startPageDriveLimit` milliseconds.
@@ -1709,6 +1735,9 @@ ApplicationWindow {
         if (developerToolsDock.visible)
             regions.push(window.measureRegion("developer-tools", developerToolsDock, 0,
                                               developerToolsDock.width));
+        if (siteStylePanel.visible)
+            regions.push(window.measureRegion("site-style", siteStylePanel, 0,
+                                              siteStylePanel.width));
         return regions;
     }
 
@@ -1743,6 +1772,8 @@ ApplicationWindow {
             return "sidebar";
         if (item === developerToolsDock || item === developerToolsResizer)
             return "developer-tools";
+        if (item === siteStylePanel)
+            return "site-style";
         if (item === engineLoader || item === startPage || (item === omnibar && omnibar.resting))
             return window.pageRegionName();
         return "";
@@ -1766,6 +1797,10 @@ ApplicationWindow {
         }
         if (name === "developer-tools") {
             developerToolsDock.focusInspector();
+            return;
+        }
+        if (name === "site-style") {
+            siteStylePanel.focusEditor();
             return;
         }
         // The pane that is not showing the active tab is reached by focusing
@@ -1988,6 +2023,11 @@ ApplicationWindow {
                   });
         rows.push({
                       "separator": true
+                  });
+        rows.push({
+                      "label": qsTr("Style this site"),
+                      "command": "site-style",
+                      "enabled": window.siteStyleAvailable
                   });
         rows.push({
                       "label": qsTr("Inspect element"),
@@ -2331,6 +2371,8 @@ ApplicationWindow {
     // show can do it.
     readonly property var pageDarkeningSetting: typeof pageDarkening !== "undefined"
                                                 ? pageDarkening : null
+    // The reader's own CSS by site, which the tests run without.
+    readonly property var readerSiteStyles: typeof siteStyles !== "undefined" ? siteStyles : null
     // Settings says so beside the switch, so with no page open there is no
     // engine to fall short and it is not said.
     readonly property bool pageDarkeningAvailable: engineLoader.item === null || (
@@ -2831,6 +2873,51 @@ ApplicationWindow {
         engineLoader.exitSiteFullscreen();
     }
 
+    // The panel is opened to type in, so the editor takes the keyboard; closed,
+    // the keyboard goes back to the page.
+    function toggleSiteStylePanel() {
+        if (window.siteStylePanelOpen) {
+            window.closeSiteStylePanel();
+            return;
+        }
+        if (!window.siteStyleAvailable)
+            return;
+        window.siteStylePanelOpen = true;
+        siteStylePanel.focusEditor();
+    }
+
+    // A site style's Edit in Settings: the panel on that host over a page of
+    // it, the one on show if it is one, or the file in the reader's editor
+    // where no page of the host is open here.
+    function editSiteStyle(host) {
+        const under = function (url) {
+            return window.readerSiteStyles.reaches(host, url);
+        };
+        let tabId = under(window.windowBrowser.activeUrl) ? window.windowBrowser.activeTabId : "";
+        const tabs = window.windowBrowser.tabs;
+        for (let row = 0; tabId.length === 0 && row < tabs.rowCount(); ++row) {
+            const index = tabs.index(row, 0);
+            if (under(tabs.data(index, Qt.UserRole + 3)))
+                tabId = String(tabs.data(index, Qt.UserRole + 1));
+        }
+        if (tabId.length === 0 || !window.siteStylesHere) {
+            window.readerSiteStyles.openInEditor(host);
+            return;
+        }
+        window.settingsOpen = false;
+        window.windowBrowser.activateTab(tabId);
+        window.siteStylePanelOpen = true;
+        siteStylePanel.chooseHost(host);
+        siteStylePanel.focusEditor();
+    }
+
+    function closeSiteStylePanel() {
+        const focused = window.focusedRegionName() === "site-style";
+        window.siteStylePanelOpen = false;
+        if (focused)
+            window.focusPage();
+    }
+
     function toggleDeveloperTools() {
         if (!window.developerToolsAvailable)
             return;
@@ -2892,6 +2979,10 @@ ApplicationWindow {
 
     function restoreChromeAppearance() {
         window.glanceEnabled = window.windowBrowser.preference("glance", "true") === "true";
+        window.newTabShowsStartPage = window.windowBrowser.preference("new-tab-start-page",
+                                                                      "false") === "true";
+        window.sidebarNewTab = window.windowBrowser.preference("sidebar-new-tab", "true")
+                === "true";
         const scene = window.windowBrowser.preference("start-page-scene", "crt-road");
         window.startPageScene = window.startPageScenes.indexOf(scene) >= 0 ? scene : "crt-road";
         window.startPageGlass = window.windowBrowser.preference("start-page-glass", "true")
@@ -3007,6 +3098,16 @@ ApplicationWindow {
         window.windowBrowser.setPreference("glance", enabled ? "true" : "false");
     }
 
+    function setSidebarNewTab(enabled) {
+        window.sidebarNewTab = enabled;
+        window.windowBrowser.setPreference("sidebar-new-tab", enabled ? "true" : "false");
+    }
+
+    function setNewTabShowsStartPage(enabled) {
+        window.newTabShowsStartPage = enabled;
+        window.windowBrowser.setPreference("new-tab-start-page", enabled ? "true" : "false");
+    }
+
     function setUseFavicons(enabled) {
         window.useFavicons = enabled;
         window.windowBrowser.setPreference("use-favicons", enabled ? "true" : "false");
@@ -3056,7 +3157,8 @@ ApplicationWindow {
         function onPreferenceChanged(name) {
             if (name === "glance" || name === "start-page-scene" || name === "start-page-glass" || name
                     === "sidebar-side" || name === "space-colours" || name === "telemetry-text"
-                    || name === "telemetry-hidden")
+                    || name === "telemetry-hidden" || name === "new-tab-start-page" || name
+                    === "sidebar-new-tab")
                 window.restoreChromeAppearance();
             else if (name === "app-icon")
                 window.restoreAppIcon();
@@ -3595,21 +3697,23 @@ ApplicationWindow {
                 omnibar.focusField();
             return;
         }
-        // A new tab is asked of the Start page, over the page on show.
-        if (forNewTab) {
+        // A new tab is asked of the Start page, over the page on show, where
+        // the reader chose it. Otherwise the Omnibar opens over the page with
+        // an empty field, heading to a new tab.
+        if (forNewTab && window.newTabShowsStartPage) {
             window.shortcutsOpen = false;
             window.closeGlance();
             window.startPageSummoned = true;
             return;
         }
-        const preset = window.windowBrowser.activeUrl.toString();
+        const preset = forNewTab ? "" : window.windowBrowser.activeUrl.toString();
         // Suggestions arrive from the search thread, so the panel opens on the
         // typing it was opened for rather than on a scan of the Space's
         // history finishing first.
         window.forgetOmnibarSuggestions();
         if (!window.privateWindow)
             window.windowBrowser.requestHistorySuggestions(preset);
-        omnibar.beginAddress(preset, false);
+        omnibar.beginAddress(preset, forNewTab);
         omnibarOpen = true;
     }
 
@@ -4267,6 +4371,9 @@ ApplicationWindow {
                 problemRecording: window.recording
                 onProblemReportRequested: window.reportProblem()
                 onSettingsRequested: window.requestSettings()
+                onNewTabRequested: window.commands.run("new-tab", -1)
+                newTabWaiting: window.newTabAwaited
+                newTabRowEnabled: window.sidebarNewTab
                 onSyncRequested: window.requestSync()
                 onBackRequested: engineLoader.goBack()
                 onForwardRequested: engineLoader.goForward()
@@ -4389,19 +4496,23 @@ ApplicationWindow {
                     // over the seam and paint the sidebar's edge out for the
                     // length of the nudge.
                     clip: sidebar.tabOffsetX !== 0
-                    anchors.left: parent.left
+                    // The page gives up the width a dock takes rather than
+                    // being covered by it, so nothing the inspector or the
+                    // picker points at is hidden behind the panel doing so.
+                    anchors.left: siteStylePanel.visible && siteStylePanel.dockedLeft
+                                  ? siteStylePanel.right : parent.left
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
-                    // The page gives up the width the dock takes rather than
-                    // being covered by it, so nothing the inspector points at
-                    // is hidden behind the inspector.
                     anchors.right: developerToolsDock.visible ? developerToolsDock.left :
-                                                                parent.right
+                                                                siteStylePanel.visible &&
+                                                                !siteStylePanel.dockedLeft
+                                                                ? siteStylePanel.left : parent.right
                     focus: true
                     browserController: window.windowBrowser
                     agentControl: window.agentControlSource
                     pageScale: window.readerPageScale
                     pageDarkening: window.pageDarkeningSetting
+                    siteStyles: window.readerSiteStyles
                     problemRecording: window.recording
                     engineSource: engineViewSource
                     spaceProfiles: spaceProfiles
@@ -4599,16 +4710,42 @@ ApplicationWindow {
                              !engineLoader.siteFullscreenActive
                 }
 
+                // Opposite the sidebar, against the viewport's outer edge, with
+                // Developer tools inside it when both are open.
+                SiteStylePanel {
+                    id: siteStylePanel
+                    objectName: "siteStylePanel"
+                    dockedLeft: chromeRow.sidebarOnRight
+                    x: dockedLeft ? 0 : DevicePixels.snap(parent.width - width,
+                                                          window.devicePixelRatio)
+                    width: window.siteStylePanelWidth
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    visible: window.siteStylePanelShown && !window.settingsOpen &&
+                             !window.historyOpen
+                    z: 4
+                    colors: window.colors
+                    iconFontFamily: materialSymbols.name
+                    styles: window.readerSiteStyles
+                    pageUrl: window.windowBrowser.activeUrl
+                    engine: engineLoader.item
+                    onCloseRequested: window.closeSiteStylePanel()
+                }
+
                 DeveloperToolsDock {
                     id: developerToolsDock
                     objectName: "developerToolsDock"
-                    // Against the right edge, starting on a whole pixel of the
-                    // display, so the page beside it ends on one.
-                    x: DevicePixels.snap(parent.width - window.developerToolsWidth,
+                    // Against the right edge, or the Site style panel there,
+                    // starting on a whole pixel of the display, so the page
+                    // beside it ends on one.
+                    readonly property real outerEdge: siteStylePanel.visible &&
+                                                      !siteStylePanel.dockedLeft ? siteStylePanel.x :
+                                                                                   parent.width
+                    x: DevicePixels.snap(outerEdge - window.developerToolsWidth,
                                          window.devicePixelRatio)
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
-                    width: parent.width - x
+                    width: outerEdge - x
                     visible: window.developerToolsOpen && !window.settingsOpen &&
                              !window.historyOpen
                     z: 4
@@ -5375,6 +5512,7 @@ ApplicationWindow {
                             httpsOnly: window.httpsOnlyPolicy
                             pageDarkening: window.pageDarkeningSetting
                             pageDarkeningAvailable: window.pageDarkeningAvailable
+                            siteStyles: window.readerSiteStyles
                             engineSuggestions: window.engineSuggestionSetting
                             webRtcPolicy: window.webRtcAddressPolicy
                             secureDns: window.dnsResolver
@@ -5424,6 +5562,8 @@ ApplicationWindow {
                             appIcon: window.appIcon
                             sidebarSide: window.sidebarSide
                             glanceEnabled: window.glanceEnabled
+                            newTabShowsStartPage: window.newTabShowsStartPage
+                            sidebarNewTab: window.sidebarNewTab
                             spaceColours: window.spaceColours
                             startPageScene: window.sceneSettingsWindow.startPageScene
                             startPageGlass: window.sceneSettingsWindow.startPageGlass
@@ -5471,6 +5611,9 @@ ApplicationWindow {
                                 window.revealDownload(path);
                             }
                             onProblemReportRequested: window.reportProblem()
+                            onSiteStyleEdited: function (host) {
+                                window.editSiteStyle(host);
+                            }
                             onSettingsFileRevealed: function (path) {
                                 SavedDownload.reveal(path);
                             }
@@ -5482,6 +5625,12 @@ ApplicationWindow {
                             }
                             onGlanceToggled: function (enabled) {
                                 window.setGlanceEnabled(enabled);
+                            }
+                            onSidebarNewTabToggled: function (enabled) {
+                                window.setSidebarNewTab(enabled);
+                            }
+                            onNewTabShowsStartPageToggled: function (enabled) {
+                                window.setNewTabShowsStartPage(enabled);
                             }
                             onSpaceColoursToggled: function (enabled) {
                                 window.setSpaceColours(enabled);
@@ -5755,6 +5904,7 @@ ApplicationWindow {
             drawnZoom: engineLoader.drawnZoom(1)
             permissionController: window.windowBrowser
             pageDarkening: window.pageDarkeningSetting
+            siteStyles: window.readerSiteStyles
             browserController: window.windowBrowser
             contentBlocker: contentBlocker
             engineContentBlocker: engineContentBlocker
@@ -6560,7 +6710,7 @@ ApplicationWindow {
                 window.commitFromStartPage(text);
                 return;
             }
-            window.windowBrowser.openInput(text, false);
+            window.windowBrowser.openInput(text, omnibar.newTabIntent);
             window.closeOmnibar();
         }
     }

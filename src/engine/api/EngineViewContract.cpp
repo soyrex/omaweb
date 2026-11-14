@@ -32,6 +32,21 @@ QStringList validateEngineViewContract(const QObject &adapter)
         {"pageHasFocus", QMetaType::Bool},
         {"capabilities", QMetaType::Int},
         {"contentBlocker", QMetaType::QVariant},
+        // The reader's own CSS by site (`SiteStyles`), or null where the
+        // reader's styles do not apply, as in an Agent Space. The adapter owes
+        // a page the sheet for its host before the page renders, whether or
+        // not Content blocking is on for it, and owes an open page a changed
+        // sheet without a reload.
+        {"siteStyles", QMetaType::QVariant},
+        // The Site style panel's picker, while the reader picks: what is
+        // picked, as `selector`, `count`, `level` of `levels` and `valid`.
+        // Enter in the page or `hidePick` hands the selector over as
+        // `pickHidden(selector)`, and the next document ends the picking.
+        {"picking", QMetaType::Bool},
+        {"pick", QMetaType::QVariant},
+        // How many elements each selector `countHidden` was given matches on
+        // the page, by selector.
+        {"hiddenCounts", QMetaType::QVariant},
         // Which Space's browsing identity this view's pages belong to, so
         // Content blocking can key the Refusal tally by it. Empty in a Private
         // window, whose shared session has no Space of its own.
@@ -189,6 +204,16 @@ QStringList validateEngineViewContract(const QObject &adapter)
         // answer comes, since the core has refused them already.
         {"cancelAgentVerbs", false, 0},
         {"exitSiteFullscreen", false, 0},
+        {"startPicking", false, 0},
+        {"stopPicking", false, 0},
+        // `parent`, `child`, `previous` or `next`.
+        {"movePick", false, 1},
+        {"widenPick", false, 1},
+        {"setPickSelector", false, 1},
+        {"hidePick", false, 0},
+        {"countHidden", false, 1},
+        // The page drawn without a hide, and what it hides outlined, while on.
+        {"previewHidden", false, 2},
         {"focusPage", false, 0},
         {"checkForEditedFormState", false, 1},
         {"acceptNewWindowRequest", false, 1},

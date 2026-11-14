@@ -1952,10 +1952,10 @@ Item {
     // adopted in Omaweb's world and a scriptlet runs in the page's.
     readonly property string blockingScriptNamePrefix: "Omaweb content blocking "
     readonly property string blockingSheetNamePrefix: "Omaweb cosmetic sheet "
-    readonly property int blockingScriptLimit: 16
+    readonly property int originScriptLimit: 16
     // The pattern the engine matches against the document's address, which
     // it spells without the scheme's default port.
-    function blockingScriptPattern(url) {
+    function originScriptPattern(url) {
         return root.originAddress(url).replace(/^(http:\/\/.*):80$/, "$1").replace(
                     /^(https:\/\/.*):443$/, "$1") + "/*";
     }
@@ -1964,21 +1964,20 @@ Item {
             return;
         const css = contentBlocker.cosmeticStyleSheet(url);
         const scriptlets = contentBlocker.scriptletSource(url);
-        const pattern = root.blockingScriptPattern(url);
+        const pattern = root.originScriptPattern(url);
         // The stylesheet is a script of its own and goes first: hiding what
         // the page is about to render does not depend on a scriptlet, and a
         // scriptlet that throws cannot take the hiding with it.
-        root.installBlockingScriptPart(root.blockingSheetNamePrefix, pattern,
-                                       WebEngineScript.ApplicationWorld, css.length > 0
-                                       ? root.styleSheetSnippet(root.cosmeticSheetId, css) : "");
-        root.installBlockingScriptPart(root.blockingScriptNamePrefix, pattern,
-                                       WebEngineScript.MainWorld, root.scriptletSnippet(
-                                           scriptlets));
+        root.installOriginScript(root.blockingSheetNamePrefix, pattern,
+                                 WebEngineScript.ApplicationWorld, css.length > 0
+                                 ? root.styleSheetSnippet(root.cosmeticSheetId, css) : "");
+        root.installOriginScript(root.blockingScriptNamePrefix, pattern, WebEngineScript.MainWorld,
+                                 root.scriptletSnippet(scriptlets));
         // The document about to be created carries whatever these scripts add
         // and nothing else, so what the last one had is no longer there.
         root.cosmeticRulesInjected = css.length > 0;
     }
-    function installBlockingScriptPart(prefix, pattern, world, source) {
+    function installOriginScript(prefix, pattern, world, source) {
         const name = prefix + pattern;
         const scripts = webView.profile.userScripts;
         let script = null;
@@ -1992,9 +1991,9 @@ Item {
                     + "\n// ==/UserScript==\n" + source;
         }
         root.replaceScript(scripts, name, script);
-        const blocking = scripts.collection.filter(installed => installed.name.startsWith(prefix));
-        while (blocking.length > root.blockingScriptLimit)
-            scripts.remove(blocking.shift());
+        const installed = scripts.collection.filter(each => each.name.startsWith(prefix));
+        while (installed.length > root.originScriptLimit)
+            scripts.remove(installed.shift());
     }
 
     // Re-application into a document that is already open, for a rule set or a
@@ -2016,6 +2015,166 @@ Item {
                               WebEngineScript.ApplicationWorld);
     }
 
+    // ---- the reader's own styles ------------------------------------------
+    //
+    // The reader's CSS for a site (`SiteStyles`), or null where their styles
+    // do not apply, as in an Agent Space. A style is the reader's, not Content
+    // blocking's, so it rides a sheet and a script of its own, which no
+    // per-site blocking decision reaches. It goes in as the cosmetic sheet
+    // does, and for the same reasons: constructed rather than written into the
+    // document, so a page's policy cannot refuse it, and installed on the
+    // Engine profile for the page's origin at the navigation request, so it is
+    // in the document before the page renders.
+    property var siteStyles: null
+    readonly property string siteStyleSheetId: "__omaweb_site_style"
+    readonly property string siteStyleScriptNamePrefix: "Omaweb site style "
+    // Whether the document on show may carry a sheet, so a style removed
+    // while it is open is cleared from it, and a page that never had one is
+    // not sent a script to clear nothing. It is set before the document
+    // exists, and only cleared once a clearing has been sent, since a
+    // navigation that turns out to be a download leaves the page on show.
+    property bool siteStyleInjected: false
+    // The address the main frame is navigating to, until its load ends, so a
+    // style saved while the load runs reaches the document being made.
+    property url siteStyleNavigation: ""
+
+    function isWebAddress(url) {
+        const scheme = String(url).split(":")[0].toLowerCase();
+        return scheme === "http" || scheme === "https";
+    }
+
+    function siteStyleSheet(url) {
+        return root.siteStyles ? root.siteStyles.styleSheetShowing(url, root.previewedHidden) : "";
+    }
+    function installSiteStyleScript(url) {
+        const css = root.siteStyleSheet(url);
+        root.installOriginScript(root.siteStyleScriptNamePrefix, root.originScriptPattern(url),
+                                 WebEngineScript.ApplicationWorld, css.length > 0
+                                 ? root.styleSheetSnippet(root.siteStyleSheetId, css) : "");
+        return css;
+    }
+    // The open document takes the sheet as it stands.
+    function applySiteStyle() {
+        const css = root.siteStyleSheet(root.currentUrl);
+        if (css.length === 0 && !root.siteStyleInjected)
+            return;
+        root.siteStyleInjected = css.length > 0;
+        webView.runJavaScript(root.styleSheetSnippet(root.siteStyleSheetId, css),
+                              WebEngineScript.ApplicationWorld);
+    }
+    // A changed sheet reaches the open document, the next one the page's
+    // origin creates, and the one a load under way is making.
+    function restyleSite() {
+        // A navigation that became a download ended no load, so its address
+        // counts only while one runs.
+        for (const url of [root.currentUrl, root.loading ? root.siteStyleNavigation : ""]) {
+            if (root.isWebAddress(url))
+                root.installSiteStyleScript(url);
+        }
+        root.applySiteStyle();
+    }
+    onSiteStylesChanged: root.restyleSite()
+
+    Connections {
+        target: root.siteStyles
+        ignoreUnknownSignals: true
+        function onChanged() {
+            root.restyleSite();
+        }
+    }
+
+    // ---- the Site style picker ----------------------------------------------
+    //
+    // The Site style panel's picker (`site-style-picker.js`), run in the
+    // application world while the reader picks. It reports what is picked as
+    // `pick`: its `selector`, how many elements it matches (`count`), how far
+    // it is widened (`level`, of `levels`) and whether a typed selector parses
+    // (`valid`). Enter in the page, or `hidePick`, hands the selector over as
+    // `pickHidden`; Escape, a navigation or `stopPicking` ends it.
+    property bool picking: false
+    property var pick: ({})
+    // The colour the highlight is drawn in: the window's accent, which a page's
+    // own controls take too.
+    readonly property color siteStylePickerAccent: root.pageControlAccent.a > 0
+                                                   ? root.pageControlAccent : "#7c6cff"
+    signal pickHidden(string selector)
+
+    function pickerCall(call) {
+        webView.runJavaScript(
+                    "globalThis.__omawebSiteStylePicker && globalThis.__omawebSiteStylePicker."
+                    + call + ";", WebEngineScript.ApplicationWorld);
+    }
+    function startPicking() {
+        root.pick = ({});
+        root.picking = true;
+        webView.runJavaScript(root.reporting("globalThis.__omawebSiteStyleAccent = "
+                                             + JSON.stringify(String(root.siteStylePickerAccent))
+                                             + ";" + QtPageScripts.siteStylePicker),
+                              WebEngineScript.ApplicationWorld);
+    }
+    // Told to the page whatever `picking` says, so a picker the shell lost
+    // track of is never left taking the page's clicks.
+    function stopPicking() {
+        root.picking = false;
+        root.pickerCall("stop(false)");
+    }
+    function movePick(direction) {
+        root.pickerCall("move(" + JSON.stringify(String(direction)) + ")");
+    }
+    function widenPick(level) {
+        root.pickerCall("widen(" + Number(level) + ")");
+    }
+    function setPickSelector(text) {
+        root.pickerCall("select(" + JSON.stringify(String(text)) + ")");
+    }
+    function hidePick() {
+        root.pickerCall("hide()");
+    }
+    // How many elements each selector the panel lists matches on the page, by
+    // selector, as of the last `countHidden`. One that does not parse
+    // matches none.
+    property var hiddenCounts: ({})
+    function countHidden(selectors) {
+        const list = Array.from(selectors, String);
+        webView.runJavaScript("(" + JSON.stringify(list) + ").reduce((counts, selector) => {"
+                              + "try { counts[selector] = document.querySelectorAll(selector).length; }"
+                              + "catch (error) { counts[selector] = 0; } return counts; }, {})",
+                              WebEngineScript.ApplicationWorld, function (counts) {
+                                  root.hiddenCounts = counts || ({});
+                              });
+    }
+    // The hides the reader is previewing: the page is drawn without them, and
+    // what they hide is outlined.
+    property var previewedHidden: []
+    readonly property string siteStylePreviewSheetId: "__omaweb_site_style_preview"
+    function previewHidden(selector, on) {
+        const others = root.previewedHidden.filter(each => each !== String(selector));
+        root.previewedHidden = on ? others.concat([String(selector)]) : others;
+        root.applySiteStyle();
+        const outline = root.previewedHidden.map(each => each + " { outline: 2px dashed " + String(
+                                                             root.siteStylePickerAccent)
+                                                         + " !important; outline-offset: 2px !important; }");
+        webView.runJavaScript(root.styleSheetSnippet(root.siteStylePreviewSheetId, outline.join(
+                                                         "\n")), WebEngineScript.ApplicationWorld);
+    }
+    function pickerReported(channel, body) {
+        if (!root.picking)
+            return;
+        if (channel === "site_style_pick") {
+            try {
+                root.pick = JSON.parse(body);
+            } catch (error) {
+                root.pick = ({});
+            }
+        } else if (channel === "site_style_hide") {
+            root.picking = false;
+            try {
+                root.pickHidden(String(JSON.parse(body).selector));
+            } catch (error) {}
+        } else if (channel === "site_style_stop") {
+            root.picking = false;
+        }
+    }
     // The generic rules are the ones written against no particular site, and
     // sending all of them cost a 617 KB stylesheet on every page. Each frame
     // reports the classes and ids it actually carries, and only the generic
@@ -4728,7 +4887,10 @@ Item {
     // as the white it is written in, so the cover would be white over a dark page.
     // Chromium darkens only a background brighter than 205 of 255. The inverted
     // lightness, floored at about 7%, is dark where the page is but approximate:
-    // the engine draws #f5f5f5 as #222222 and white as #121212.
+    // the engine draws #f5f5f5 as #222222, #fafafa as #1f1f1f, and white as
+    // #121212 on x86_64 and #1b1b1b on aarch64, where its build rounds the
+    // channels of an inverted grey apart and Chromium does not move it to
+    // #121212 (#936). The cover is #121212 over each.
     readonly property color coverGroundColor: {
         // A page left as written is covered in the ground it reported, which on
         // a wrapper's theme is the wrapper's and not the canvas's.
@@ -4974,6 +5136,10 @@ Item {
                 root.documentSurveyed = false;
                 return;
             }
+            // A style saved while the load ran may have reached the document
+            // being left, or the script before the new one was installed.
+            root.siteStyleNavigation = "";
+            root.applySiteStyle();
             // A document that loaded surveyed itself when its DOM was parsed
             // and verified the site stylesheet with the answer, unless the
             // survey script never reached it. The DOM is often parsed before
@@ -5106,8 +5272,12 @@ Item {
                 }
                 // Site rules and scriptlets are named by host, which only a
                 // web address has.
-                if (request.isMainFrame && (scheme === "http" || scheme === "https"))
+                if (request.isMainFrame && (scheme === "http" || scheme === "https")) {
                     root.installBlockingScript(request.url);
+                    root.siteStyleNavigation = request.url;
+                    if (root.installSiteStyleScript(request.url).length > 0)
+                        root.siteStyleInjected = true;
+                }
                 return;
             }
             request.reject();
@@ -5156,7 +5326,9 @@ Item {
                                             root.pageGeneration);
                 return;
             }
-            if (report.channel === "site_data_cleared") {
+            if (report.channel.startsWith("site_style_")) {
+                root.pickerReported(report.channel, report.body);
+            } else if (report.channel === "site_data_cleared") {
                 try {
                     const cleared = JSON.parse(report.body);
                     root.pageSiteDataCleared(String(cleared.origin), cleared.cleared,
@@ -5243,6 +5415,11 @@ Item {
                     console.warn("Could not read whether media is playing: " + error);
                 }
             } else if (report.channel === "document_created") {
+                // The picker and a preview are the document's, and go with
+                // it. A load that leaves the document, as a download, another
+                // app's address or an answer with nothing do, leaves them.
+                root.picking = false;
+                root.previewedHidden = [];
                 root.forgetMediaFrames();
                 root.forgetFormFrames();
                 root.documentReported = true;

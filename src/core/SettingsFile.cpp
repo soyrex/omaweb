@@ -51,7 +51,7 @@ namespace {
 
     constexpr auto versionKey = "version";
 
-    enum class Kind { Switch, Number, Fraction, Text, Fonts, Extensions, LinkRules };
+    enum class Kind { Switch, Number, Fraction, Text, Fonts, Extensions, HostSwitches, LinkRules };
 
     struct Key {
         QLatin1StringView name;
@@ -78,7 +78,10 @@ namespace {
             {QLatin1StringView("browser-theme"), Kind::Text, QString()},
             {QLatin1StringView("sidebar-side"), Kind::Text, QStringLiteral("left"),
                 {QStringLiteral("left"), QStringLiteral("right")}},
+            // The sidebar's "+ New tab" row after the tabs.
+            {QLatin1StringView("sidebar-new-tab"), Kind::Switch, true},
             {QLatin1StringView("glance"), Kind::Switch, true},
+            {QLatin1StringView("new-tab-start-page"), Kind::Switch, false},
             {QLatin1StringView("start-page-scene"), Kind::Text, QStringLiteral("crt-road")},
             {QLatin1StringView("start-page-glass"), Kind::Switch, true},
             // The Telemetry Scene's text size, and the modules the reader
@@ -111,6 +114,9 @@ namespace {
             // Where a link from another app opens, first match first (ADR 0061
             // and LinkRules.h).
             {QLatin1StringView("link-rules"), Kind::LinkRules, QJsonArray {}},
+            // The site styles the reader switched off, by host, each `false`
+            // (SiteStyles.h). A host not named is on.
+            {QLatin1StringView("site-styles"), Kind::HostSwitches, unstated},
         };
         return keys;
     }
@@ -159,7 +165,8 @@ namespace {
             }
             return true;
         }
-        case Kind::Extensions: {
+        case Kind::Extensions:
+        case Kind::HostSwitches: {
             if (!value.isObject()) {
                 return false;
             }
@@ -427,6 +434,9 @@ QString SettingsFile::text(const QJsonValue &value)
     if (value.isArray()) {
         return QString::fromUtf8(QJsonDocument(value.toArray()).toJson(QJsonDocument::Compact));
     }
+    if (value.isObject()) {
+        return QString::fromUtf8(QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact));
+    }
     return value.toString();
 }
 
@@ -452,6 +462,11 @@ QJsonValue SettingsFile::fromText(const QString &key, const QString &text)
         return document.isArray() ? QJsonValue(document.array())
                                   : QJsonValue(QJsonValue::Undefined);
     }
+    if (known && known->kind == Kind::HostSwitches) {
+        const auto document = QJsonDocument::fromJson(text.toUtf8());
+        return document.isObject() ? QJsonValue(document.object())
+                                   : QJsonValue(QJsonValue::Undefined);
+    }
     if (known && known->kind == Kind::Number) {
         bool number = false;
         const auto value = text.toInt(&number);
@@ -468,7 +483,9 @@ bool SettingsFile::set(const QString &key, const QJsonValue &value)
 bool SettingsFile::setMember(const QString &key, const QString &member, const QJsonValue &value)
 {
     const auto *known = find(key);
-    if (!known || (known->kind != Kind::Fonts && known->kind != Kind::Extensions)) {
+    if (!known
+        || (known->kind != Kind::Fonts && known->kind != Kind::Extensions
+            && known->kind != Kind::HostSwitches)) {
         return false;
     }
     return change([&](QJsonObject &object, Order *order) {

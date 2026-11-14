@@ -73,6 +73,21 @@ TestCase {
         Omaweb.Main {}
     }
 
+    // A link carried by a drag, as a page or another program drops one.
+    Component {
+        id: linkDragComponent
+
+        Item {
+            width: 4
+            height: 4
+            Drag.dragType: Drag.Internal
+            Drag.mimeData: {
+                "text/uri-list": "https://dropped-on-the-row.example/",
+                "text/plain": "https://dropped-on-the-row.example/"
+            }
+        }
+    }
+
     // Content blocking as the chrome reads it, having refused one request on
     // the page on show.
     Component {
@@ -360,6 +375,7 @@ TestCase {
         window.endStartPageDrive();
         window.startPageSummoned = false;
         window.shortcutsOpen = false;
+        window.siteStylePanelOpen = false;
         window.settingsOpen = false;
         window.historyOpen = false;
         window.dialogMode = "";
@@ -388,6 +404,10 @@ TestCase {
             window.setStartPageGlass(true);
         if (!window.spaceColours)
             window.setSpaceColours(true);
+        if (window.newTabShowsStartPage)
+            window.setNewTabShowsStartPage(false);
+        if (!window.sidebarNewTab)
+            window.setSidebarNewTab(true);
         if (fontSettings.interfaceFontSizeOverridden)
             fontSettings.resetInterfaceFontSize();
         if (pageScale.overridden)
@@ -532,7 +552,8 @@ TestCase {
 
     // A button in a row the positioner has not laid out yet sits on top of its
     // neighbours, so a press meant for one lands on another. The first answer
-    // in a row is at the left edge; every one after it has been moved.
+    // in a row is at the left edge; every one after it has been moved. A row
+    // still sliding in across the sidebar is waited for the same way.
     function settleActions(action) {
         if (!action)
             return;
@@ -864,10 +885,11 @@ TestCase {
     // behind the model, so a row read too early is read where it is not going
     // to be.
     function settleRow(row) {
-        let previous = -1;
+        let previous = "";
         let steady = 0;
         tryVerify(function () {
-            const at = row.mapToItem(window.contentItem, 0, 0).y;
+            const point = row.mapToItem(window.contentItem, 0, 0);
+            const at = point.x + "," + point.y;
             steady = at === previous ? steady + 1 : 0;
             previous = at;
             return steady >= 3;
@@ -985,7 +1007,7 @@ TestCase {
             return menu.visible;
         });
         compare(labels(), ["Back", "Forward", "Reload", "Retry over insecure HTTP", "—",
-                           "Copy address", "—", "Inspect element"]);
+                           "Copy address", "—", "Style this site", "Inspect element"]);
         keyClick(Qt.Key_Escape);
         tryVerify(function () {
             return !menu.visible;
@@ -2838,10 +2860,12 @@ TestCase {
                   {
                       "name": "the Start page over a page",
                       "open": function () {
+                          window.setNewTabShowsStartPage(true);
                           window.openOmnibar(true);
                       },
                       "close": function () {
                           window.closeOmnibar();
+                          window.setNewTabShowsStartPage(false);
                       }
                   },
                   {
@@ -3472,12 +3496,9 @@ TestCase {
         });
     }
 
-    function test_sidebarHasNoNewTabButton() {
-        const newTabButton = findChild(window.contentItem, "newTabButton");
-        verify(newTabButton === null);
-    }
-
+    // With the Start page asked for, a new tab still waits for a destination.
     function test_newTabRequestWaitsForCommittedDestination() {
+        window.setNewTabShowsStartPage(true);
         const previousTabId = browser.activeTabId;
         window.openOmnibar(true);
         tryCompare(window, "omnibarShown", true);
@@ -3542,6 +3563,7 @@ TestCase {
         verify(tabRow !== null);
         verify(speaker !== null);
         verify(tile !== null);
+        settleRow(tabRow);
 
         // A silent tab says nothing about sound and shows its chip.
         verify(!speaker.visible);
@@ -5105,6 +5127,523 @@ TestCase {
         compare(afterSwitchOff, [false, false, false]);
     }
 
+    // The reader's site styles reach every page of theirs, a popup's included,
+    // and no page in an Agent Space, so an Agent reads a site as it is served.
+    // A Space the reader takes over is theirs, and its pages take the styles.
+    function test_siteStylesReachTheReadersPagesAndNoAgentSpace() {
+        const readersSpaceId = browser.activeSpaceId;
+        const page = openPage("https://styled.example/");
+        const readers = page.siteStyles;
+        page.simulateNewWindowRequest("https://login.styled.example/", true);
+        const auxiliary = findChild(window, "auxiliaryWindow");
+        tryVerify(function () {
+            return auxiliary !== null && auxiliary.visible;
+        });
+        const loader = findChild(auxiliary.contentItem, "auxiliaryEngineLoader");
+        tryVerify(function () {
+            return loader.item !== null;
+        });
+        const popup = loader.item.siteStyles;
+        auxiliary.close();
+        tryVerify(function () {
+            return !auxiliary.visible;
+        });
+
+        const spaceId = agentSpaceProbe.create("Styled agent", "claude-code", false);
+        verify(browser.switchSpace(spaceId));
+        tryCompare(findChild(window.contentItem, "sidebar"), "arriving", false);
+        const agentPage = openPage("https://styled.example/agent");
+        const inAgentSpace = agentPage.siteStyles;
+        verify(browser.takeOverSpace(spaceId));
+        const takenOver = agentPage.siteStyles;
+        verify(browser.switchSpace(readersSpaceId));
+        verify(browser.deleteSpace(spaceId, "Styled agent"));
+        // The next test starts from a sidebar at rest, not one still sliding
+        // in from the Agent Space.
+        tryCompare(findChild(window.contentItem, "sidebar"), "arriving", false);
+
+        verify(readers !== null && readers === siteStyles);
+        verify(popup === siteStyles);
+        compare(inAgentSpace, null);
+        verify(takenOver === siteStyles);
+    }
+
+    // The Site style panel docks opposite the sidebar and the page narrows
+    // beside it, as it does beside Developer tools. It writes the page's site
+    // unless the reader picks a narrower host.
+    function test_siteStylePanelDocksOppositeTheSidebar() {
+        const engineHost = findChild(window.contentItem, "engineLoader");
+        const viewport = findChild(window.contentItem, "engineViewport");
+        openPage("https://gist.github.com/villekivela");
+        const panel = findChild(window.contentItem, "siteStylePanel");
+        verify(panel !== null);
+        verify(!panel.visible);
+
+        window.commands.run("site-style", -1);
+        tryVerify(function () {
+            return panel.visible;
+        });
+        compare(panel.host, "github.com");
+        compare(panel.width, 400);
+        tryVerify(function () {
+            return Math.round(engineHost.width + panel.width) === Math.round(viewport.width);
+        });
+        compare(Math.round(engineHost.x + engineHost.width), Math.round(panel.x));
+
+        window.setSidebarSide("right");
+        tryVerify(function () {
+            return Math.round(panel.x) === 0 && Math.round(engineHost.x) === panel.width;
+        });
+
+        window.commands.run("site-style", -1);
+        tryVerify(function () {
+            return !panel.visible;
+        });
+        tryVerify(function () {
+            return Math.round(engineHost.width) === Math.round(viewport.width) && Math.round(
+                        engineHost.x) === 0;
+        });
+    }
+
+    // The panel stays open across tab switches and navigation, and follows
+    // the host of the page on show.
+    function test_siteStylePanelFollowsThePageOnShow() {
+        openPage("https://gist.github.com/villekivela");
+        const firstTabId = browser.activeTabId;
+        const panel = findChild(window.contentItem, "siteStylePanel");
+        window.commands.run("site-style", -1);
+        tryVerify(function () {
+            return panel.visible;
+        });
+
+        const engineHost = findChild(window.contentItem, "engineLoader");
+        browser.openInput("https://www.bbc.co.uk/news", true);
+        tryVerify(function () {
+            return engineHost.item !== null && engineHost.item.currentUrl.toString()
+                    === "https://www.bbc.co.uk/news";
+        });
+        verify(browser.activeTabId !== firstTabId);
+        verify(panel.visible);
+        compare(panel.host, "bbc.co.uk");
+        openPage("https://news.ycombinator.com/item?id=1");
+        compare(panel.host, "ycombinator.com");
+        const secondTabId = browser.activeTabId;
+        browser.activateTab(firstTabId);
+        tryCompare(panel, "host", "github.com");
+        verify(panel.visible);
+        browser.closeTab(secondTabId);
+    }
+
+    // An Agent Space reads every site as it is served, so it offers no Site
+    // style panel, neither by command nor in the page menu. The panel is the
+    // reader's again when their Space is.
+    function test_siteStylePanelStaysOutOfAnAgentSpace() {
+        const readersSpaceId = browser.activeSpaceId;
+        const page = openPage("https://styled.example/");
+        const panel = findChild(window.contentItem, "siteStylePanel");
+        const styleRow = function () {
+            return window.pageMenuFor({}).filter(function (row) {
+                return row.command === "site-style";
+            });
+        };
+        compare(styleRow().length, 1);
+        compare(styleRow()[0].label, "Style this site");
+        verify(styleRow()[0].enabled);
+        // The Omnibar's command scope lists it under its name.
+        const listed = function () {
+            return window.commands.actions().filter(function (action) {
+                return action.command === "site-style";
+            });
+        };
+        compare(listed().length, 1);
+        compare(listed()[0].title, "Style this site");
+        verify(listed()[0].enabled);
+        window.commands.run("site-style", -1);
+        tryVerify(function () {
+            return panel.visible;
+        });
+
+        const spaceId = agentSpaceProbe.create("Unstyled agent", "claude-code", false);
+        verify(browser.switchSpace(spaceId));
+        tryCompare(findChild(window.contentItem, "sidebar"), "arriving", false);
+        openPage("https://styled.example/agent");
+        verify(!panel.visible);
+        verify(!window.commands.available("site-style"));
+        verify(!styleRow()[0].enabled);
+        verify(!listed()[0].enabled);
+
+        verify(browser.switchSpace(readersSpaceId));
+        tryVerify(function () {
+            return panel.visible;
+        });
+        verify(browser.deleteSpace(spaceId, "Unstyled agent"));
+    }
+
+    // Typing in the panel restyles the site's pages at once. The file is
+    // written once the typing pauses, which the note beside Open in editor
+    // says, and an edit made to the file elsewhere shows in the editor.
+    function test_siteStylePanelEditsTheSitesFile() {
+        const page = openPage("https://gist.github.com/villekivela");
+        // The page takes the keyboard a turn after it is shown, and the panel
+        // takes it from the page after that.
+        tryVerify(function () {
+            return page.activeFocus;
+        });
+        const panel = findChild(window.contentItem, "siteStylePanel");
+        window.commands.run("site-style", -1);
+        tryVerify(function () {
+            return panel.visible;
+        });
+        const editor = findChild(panel, "siteStyleEditor");
+        const saved = findChild(panel, "siteStyleSaved");
+        verify(editor.activeFocus);
+        compare(editor.text, "");
+
+        keyClick(Qt.Key_P);
+        keyClick("{");
+        keyClick("}");
+        compare(siteStyles.source("github.com"), "p{}");
+        compare(siteStyles.styleSheet("https://gist.github.com/"), "p{}");
+        compare(siteStyles.unsaved, ["github.com"]);
+        compare(saved.text, "Not saved yet");
+        tryVerify(function () {
+            return siteStyles.unsaved.length === 0;
+        });
+        compare(saved.text, "Saved");
+        compare(siteStyles.styles[0].host, "github.com");
+
+        siteStyles.hide("github.com", ".promo");
+        tryCompare(editor, "text",
+                   "p{}\n/* Hidden by Omaweb */ .promo { display: none !important; }\n");
+        verify(siteStyles.remove("github.com"));
+        tryCompare(editor, "text", "");
+    }
+
+    // The panel is a region the keyboard moves to and from, as Developer
+    // tools are, and closing it hands the keyboard back to the page.
+    function test_siteStylePanelIsARegionOfTheKeyboard() {
+        const page = openPage("https://region.example/");
+        tryVerify(function () {
+            return page.activeFocus;
+        });
+        const panel = findChild(window.contentItem, "siteStylePanel");
+        const editor = findChild(panel, "siteStyleEditor");
+        window.commands.run("site-style", -1);
+        tryVerify(function () {
+            return editor.activeFocus;
+        });
+        window.moveFocus(-1, 0);
+        tryVerify(function () {
+            return page.activeFocus;
+        });
+        window.moveFocus(1, 0);
+        tryVerify(function () {
+            return editor.activeFocus;
+        });
+        mouseClick(findChild(panel, "siteStyleClose"));
+        tryVerify(function () {
+            return !panel.visible && page.activeFocus;
+        });
+    }
+
+    // The host picker lists the page's host and each one above it that is
+    // still the site, and says which have a file. A narrower host chosen stays
+    // chosen on the site's pages under it, for as long as the panel stands. The switch turns a style off without
+    // touching its file, and is the reader's setting.
+    function test_siteStylePanelPicksTheHostAndSwitchesItsStyle() {
+        verify(siteStyles.hide("github.com", ".promo"));
+        openPage("https://gist.github.com/villekivela");
+        const panel = findChild(window.contentItem, "siteStylePanel");
+        const editor = findChild(panel, "siteStyleEditor");
+        const caption = findChild(panel, "siteStyleCaption");
+        window.commands.run("site-style", -1);
+        tryVerify(function () {
+            return panel.visible;
+        });
+        compare(panel.host, "github.com");
+        verify(editor.text.indexOf(".promo") >= 0);
+
+        mouseClick(findChild(panel, "siteStyleHostButton"));
+        const hosts = findChild(panel, "siteStyleHosts");
+        // Laid out once the list is drawn, the narrowest host first.
+        tryVerify(function () {
+            const narrow = findChild(panel, "siteStyleHost-gist.github.com");
+            const site = findChild(panel, "siteStyleHost-github.com");
+            return hosts.visible && narrow !== null && site !== null && narrow.y < site.y;
+        });
+        mouseClick(findChild(panel, "siteStyleHost-gist.github.com"));
+        verify(!hosts.visible);
+        compare(panel.host, "gist.github.com");
+        compare(editor.text, "");
+        openPage("https://gist.github.com/another");
+        compare(panel.host, "gist.github.com");
+        openPage("https://example.org/");
+        compare(panel.host, "example.org");
+        openPage("https://gist.github.com/villekivela");
+        compare(panel.host, "gist.github.com");
+        mouseClick(findChild(panel, "siteStyleHostButton"));
+        tryVerify(function () {
+            const site = findChild(panel, "siteStyleHost-github.com");
+            return hosts.visible && site !== null && site.y > 0;
+        });
+        mouseClick(findChild(panel, "siteStyleHost-github.com"));
+        compare(panel.host, "github.com");
+
+        const styleSwitch = findChild(panel, "siteStyleSwitch");
+        verify(styleSwitch.visible && styleSwitch.checked);
+        mouseClick(styleSwitch);
+        tryVerify(function () {
+            return !siteStyles.enabled("github.com");
+        });
+        verify(!styleSwitch.checked);
+        verify(caption.text.indexOf("Off.") === 0);
+        compare(siteStyles.styleSheet("https://gist.github.com/"), "");
+        verify(editor.text.indexOf(".promo") >= 0);
+        mouseClick(styleSwitch);
+        tryVerify(function () {
+            return siteStyles.enabled("github.com");
+        });
+        verify(siteStyles.remove("github.com"));
+    }
+
+    // Pick, adjust and hide: the card shows what the page reports, the slider
+    // and its keys widen it, and Hide writes the selector into the site's file.
+    // Each hidden element is listed with how many it hides here, a preview and
+    // an undo. The picker stops with the panel and with the tab.
+    function test_siteStylePanelHidesAPickedElement() {
+        const page = openPage("https://feed.example/");
+        tryVerify(function () {
+            return page.activeFocus;
+        });
+        const panel = findChild(window.contentItem, "siteStylePanel");
+        window.commands.run("site-style", -1);
+        tryVerify(function () {
+            return panel.visible;
+        });
+        const card = findChild(panel, "siteStylePickCard");
+        // The column below the editor is laid out again as rows and the card
+        // come and go, and a click waits for it.
+        const press = function (item, name) {
+            waitForItemPolished(findChild(panel, "siteStyleHiding"));
+            mouseClick(findChild(item, name));
+        };
+        verify(!card.visible);
+        press(panel, "siteStylePick");
+        verify(page.picking);
+        verify(card.visible);
+        // The picker's keys are the page's, so the page takes the keyboard.
+        tryVerify(function () {
+            return page.activeFocus;
+        });
+
+        page.simulatePick({
+                              "selector": "#cookie-banner",
+                              "count": 1,
+                              "level": 0,
+                              "levels": 3,
+                              "valid": true
+                          });
+        const field = findChild(panel, "siteStyleSelector");
+        const matches = findChild(panel, "siteStyleMatches");
+        tryCompare(field, "text", "#cookie-banner");
+        compare(matches.text, "Matches 1 element on this page");
+        const widening = findChild(panel, "siteStyleWidening");
+        widening.forceActiveFocus();
+        keyClick(Qt.Key_BracketRight);
+        verify(page.pickerCalls.indexOf("widen:1") >= 0);
+        keyClick(Qt.Key_Right);
+        verify(page.pickerCalls.indexOf("widen:2") >= 0);
+        keyClick(Qt.Key_BracketLeft);
+        verify(page.pickerCalls.indexOf("widen:1") >= 0);
+
+        page.matchCounts = {
+            ".banner": 2,
+            "div[": 0
+        };
+        field.forceActiveFocus();
+        field.selectAll();
+        keyClick(Qt.Key_Period);
+        for (const letter of "banner")
+            keyClick(letter);
+        verify(page.pickerCalls.indexOf("select:.banner") >= 0);
+        compare(matches.text, "Matches 2 elements on this page");
+        // A selector that would reach past its line is not offered to hide.
+        for (const typed of " /*")
+            keyClick(typed);
+        compare(matches.text, "This selector cannot be hidden");
+        verify(!findChild(panel, "siteStyleHide").enabled);
+        keyClick(Qt.Key_Return);
+        verify(page.picking);
+        for (let erased = 0; erased < 3; ++erased)
+            keyClick(Qt.Key_Backspace);
+        verify(findChild(panel, "siteStyleHide").enabled);
+        keyClick(Qt.Key_Return);
+        verify(!page.picking);
+        verify(!card.visible);
+        compare(siteStyles.hidden("feed.example"), [".banner"]);
+
+        const row = findChild(panel, "siteStyleHidden-.banner");
+        verify(row !== null);
+        tryCompare(findChild(row, "siteStyleHiddenCount"), "text", "2 here");
+        press(row, "siteStylePreview");
+        compare(page.previewedHidden, [".banner"]);
+        press(row, "siteStylePreview");
+        compare(page.previewedHidden, []);
+        press(row, "siteStyleUndo");
+        compare(siteStyles.hidden("feed.example"), []);
+
+        press(panel, "siteStylePick");
+        verify(page.picking);
+        press(panel, "siteStyleStopPicking");
+        verify(!page.picking);
+        press(panel, "siteStylePick");
+        field.forceActiveFocus();
+        keyClick(Qt.Key_Escape);
+        verify(!page.picking);
+        press(panel, "siteStylePick");
+        browser.openInput("https://other.example/", true);
+        tryVerify(function () {
+            return !page.picking;
+        });
+        press(panel, "siteStylePick");
+        const other = findChild(window.contentItem, "engineLoader").item;
+        verify(other.picking);
+        window.commands.run("site-style", -1);
+        verify(!other.picking);
+        browser.closeActiveTab();
+        verify(siteStyles.remove("feed.example"));
+    }
+
+    // Settings lists every site style by host, after Content blocking, each
+    // with its switch, Edit and Remove. Edit opens the panel on that host
+    // where a page of it is open.
+    function test_settingsListsEverySiteStyle() {
+        verify(siteStyles.hide("github.com", ".promo"));
+        siteStyles.edit("news.ycombinator.com", "td { color: grey; }");
+        verify(siteStyles.setEnabled("news.ycombinator.com", false));
+        openPage("https://gist.github.com/villekivela");
+        const settingsSurface = findChild(window.contentItem, "settingsSurface");
+        window.requestSettings();
+        tryCompare(settingsSurface, "opacity", 1);
+        tryCompare(settingsSurface, "lift", 0);
+        const section = settingsSurface.sections.indexOf("site styles");
+        compare(section, settingsSurface.sections.indexOf("content blocking") + 1);
+        settingsSurface.section = section;
+
+        const github = findChild(settingsSurface, "siteStyle-github.com");
+        const news = findChild(settingsSurface, "siteStyle-news.ycombinator.com");
+        verify(github !== null && github.visible);
+        verify(news !== null);
+        // The rows are laid out once the section is drawn, by host.
+        tryVerify(function () {
+            return news.mapToItem(null, 0, 0).y > github.mapToItem(null, 0, 0).y + github.height
+                    / 2;
+        });
+        compare(github.title, "github.com");
+        verify(github.note.indexOf("1 hidden") >= 0);
+        verify(findChild(news, "siteStyleRowSwitch").checked === false);
+        verify(findChild(settingsSurface, "openStylesFolder").visible);
+
+        mouseClick(findChild(news, "siteStyleRowSwitch"));
+        tryVerify(function () {
+            return siteStyles.enabled("news.ycombinator.com");
+        });
+        // The rows are built again as the list changes.
+        const switchedOn = findChild(settingsSurface, "siteStyle-news.ycombinator.com");
+        verify(switchedOn.note.indexOf("off") < 0);
+        waitForItemPolished(switchedOn);
+        mouseClick(findChild(switchedOn, "removeSiteStyle"));
+        tryVerify(function () {
+            return findChild(settingsSurface, "siteStyle-news.ycombinator.com") === null;
+        });
+        compare(siteStyles.source("news.ycombinator.com"), "");
+
+        mouseClick(findChild(findChild(settingsSurface, "siteStyle-github.com"), "editSiteStyle"));
+        const panel = findChild(window.contentItem, "siteStylePanel");
+        tryVerify(function () {
+            return !window.settingsOpen && panel.visible;
+        });
+        compare(panel.host, "github.com");
+        // Settings opens on the section it was left on, and the next test
+        // expects the first.
+        settingsSurface.section = 0;
+        window.closeSiteStylePanel();
+        verify(siteStyles.remove("github.com"));
+    }
+
+    // A Private window offers the panel too, and what is typed there writes
+    // the same file a reader's Space reads.
+    function test_aPrivateWindowStylesTheSameFiles() {
+        windowManager.openPrivateWindow();
+        tryCompare(windowManager, "privateWindowCount", 1);
+        const privateBrowser = window.privateWindows[0];
+        privateBrowser.windowBrowser.openInput("https://private-styled.example/", false);
+        const panel = findChild(privateBrowser.contentItem, "siteStylePanel");
+        verify(privateBrowser.commands.available("site-style"));
+        privateBrowser.commands.run("site-style", -1);
+        tryVerify(function () {
+            return panel.visible;
+        });
+        compare(panel.host, "private-styled.example");
+        findChild(panel, "siteStyleEditor").text = "body { color: red; }";
+        const listed = siteStyles.source("private-styled.example");
+
+        privateBrowser.windowBrowser.closeActiveTab();
+        tryCompare(windowManager, "privateWindowCount", 0);
+        window.requestActivate();
+        compare(listed, "body { color: red; }");
+        tryVerify(function () {
+            return siteStyles.unsaved.length === 0;
+        });
+        verify(siteStyles.remove("private-styled.example"));
+    }
+
+    // A page at an IPv6 address has no file a style could be written to, so
+    // neither the command nor the page menu offers the panel there. A panel
+    // already open says so rather than offering an editor.
+    function test_siteStylePanelIsNotOfferedForAnIpv6Address() {
+        const panel = findChild(window.contentItem, "siteStylePanel");
+        openPage("http://[::1]:8000/");
+        verify(!window.commands.available("site-style"));
+        const row = window.pageMenuFor({}).filter(function (each) {
+            return each.command === "site-style";
+        });
+        compare(row.length, 1);
+        verify(!row[0].enabled);
+        window.commands.run("site-style", -1);
+        verify(!panel.visible);
+
+        openPage("https://styled.example/");
+        window.commands.run("site-style", -1);
+        tryVerify(function () {
+            return panel.visible;
+        });
+        openPage("http://[::1]:8000/");
+        compare(panel.host, "");
+        verify(!findChild(panel, "siteStyleEditor").enabled);
+        compare(findChild(panel, "siteStyleCaption").text,
+                "No style can be written for this page.");
+    }
+
+    // A Private window has no Agent Space, and its pages take the reader's
+    // site styles as their Spaces' pages do.
+    function test_aPrivateWindowsPagesTakeSiteStyles() {
+        windowManager.openPrivateWindow();
+        tryCompare(windowManager, "privateWindowCount", 1);
+        const privateBrowser = window.privateWindows[0];
+        const privateEngine = findChild(privateBrowser.contentItem, "engineLoader");
+        privateBrowser.windowBrowser.openInput("https://private-styled.example/", false);
+        tryVerify(function () {
+            return privateEngine.item !== null;
+        });
+        const styles = privateEngine.item.siteStyles;
+
+        privateBrowser.windowBrowser.closeActiveTab();
+        tryCompare(windowManager, "privateWindowCount", 0);
+        window.requestActivate();
+        verify(styles !== null && styles === siteStyles);
+    }
+
     // A page that asks for a window, as many sign-ins do, is drawn as a tab's
     // page is: dark from its first document, which is about:blank, then
     // following its address, the site's choice in the opener's Space and the
@@ -5543,35 +6082,42 @@ TestCase {
         engine.simulateUserActivation();
         const tabId = browser.activeTabId;
         browser.toggleActivePinned();
-        tryVerify(function () {
-            return findChild(window.contentItem, "pinned-" + tabId) !== null;
-        });
-        const pinRow = findChild(window.contentItem, "pinned-" + tabId);
-        const audioButton = findChild(window.contentItem, "audio-" + tabId);
-        verify(audioButton !== null);
-        verify(!audioButton.visible);
+        try {
+            tryVerify(function () {
+                return findChild(window.contentItem, "pinned-" + tabId) !== null;
+            });
+            const pinRow = findChild(window.contentItem, "pinned-" + tabId);
+            const audioButton = findChild(window.contentItem, "audio-" + tabId);
+            verify(audioButton !== null);
+            verify(!audioButton.visible);
+            // The pin arrives in a block of its own, and a press meant for its
+            // corner while it still moves lands beside it.
+            settleRow(pinRow);
 
-        engine.simulateAudible(true);
-        tryVerify(function () {
-            return audioButton.visible;
-        });
-        verify(audioButton.x + audioButton.width > pinRow.width / 2);
-        verify(audioButton.y + audioButton.height < pinRow.height / 2);
+            engine.simulateAudible(true);
+            tryVerify(function () {
+                return audioButton.visible;
+            });
+            verify(audioButton.x + audioButton.width > pinRow.width / 2);
+            verify(audioButton.y + audioButton.height < pinRow.height / 2);
 
-        mouseClick(pinRow, audioButton.x + audioButton.width / 2, audioButton.y + audioButton.height
-                   / 2);
-        tryVerify(function () {
-            return engine.audioMuted;
-        });
-        // The pin was not activated by the click that muted it.
-        compare(browser.activeTabId, tabId);
+            mouseClick(pinRow, audioButton.x + audioButton.width / 2, audioButton.y
+                       + audioButton.height / 2);
+            tryVerify(function () {
+                return engine.audioMuted;
+            });
+            // The pin was not activated by the click that muted it.
+            compare(browser.activeTabId, tabId);
 
-        browser.toggleTabMuted(tabId);
-        tryVerify(function () {
-            return !engine.audioMuted;
-        });
-        engine.simulateAudible(false);
-        browser.toggleActivePinned();
+            browser.toggleTabMuted(tabId);
+            tryVerify(function () {
+                return !engine.audioMuted;
+            });
+            engine.simulateAudible(false);
+        } finally {
+            if (browser.activeTabPinned)
+                browser.toggleActivePinned();
+        }
     }
 
     // Every pin is one column wide, so a partial row leaves its columns empty
@@ -9839,7 +10385,9 @@ TestCase {
         verify(engineLoader !== null);
         const personalSpaceId = browser.activeSpaceId;
 
-        openPage("https://kept.example/room");
+        // A tab of its own, whose engine this Space made: the tab a test left
+        // on show may hold one made while another Space was on show.
+        openPageInNewTab("https://kept.example/room");
         const keptTabId = browser.activeTabId;
         browser.toggleActivePinned();
         verify(browser.setTabKeepActive(keptTabId, true));
@@ -14858,11 +15406,8 @@ TestCase {
         tryVerify(function () {
             return rows.count > 2;
         });
-        tryVerify(function () {
-            return rows.itemAtIndex(1) !== null;
-        });
-        compare(rows.itemAtIndex(0).Accessible.name, "Search Bing");
-        compare(rows.itemAtIndex(1).Accessible.name, "Search Brave Search");
+        compare(omnibarRowItem(rows, 0).Accessible.name, "Search Bing");
+        compare(omnibarRowItem(rows, 1).Accessible.name, "Search Brave Search");
         panel.step(1);
         panel.step(1);
         compare(panel.selected, 1);
@@ -15413,13 +15958,10 @@ TestCase {
         compare(spaces.length, 1);
         compare(spaces[0].argument, zephyrSpaceId);
         compare(panel.selected, -1);
-        const spaceRow = panel.rows.indexOf(spaces[0]);
-        tryVerify(function () {
-            return rows.itemAtIndex(spaceRow) !== null;
-        });
-        compare(rows.itemAtIndex(spaceRow).Accessible.name, "Switch to Space Zephyr reading");
-        compare(rows.itemAtIndex(spaceRow).action, "Switch to Space");
-        compare(findChild(rows.itemAtIndex(spaceRow), "omnibarRowSpaceColor").visible, true);
+        const spaceRow = omnibarRowItem(rows, panel.rows.indexOf(spaces[0]));
+        compare(spaceRow.Accessible.name, "Switch to Space Zephyr reading");
+        compare(spaceRow.action, "Switch to Space");
+        compare(findChild(spaceRow, "omnibarRowSpaceColor").visible, true);
 
         input.text = "zoom in";
         const commands = omnibarRowsOf(panel, "command");
@@ -15645,11 +16187,95 @@ TestCase {
         }
     }
 
+    // The row drawn at `index` once the list has laid out the rows the text
+    // lists. Until its next layout the list answers with the rows it drew
+    // before, which name their new place, or -1 for a row dropped.
     function omnibarRowItem(rows, index) {
         tryVerify(function () {
-            return rows.itemAtIndex(index) !== null;
+            const item = rows.itemAtIndex(index);
+            return item !== null && item.index === index;
         });
         return rows.itemAtIndex(index);
+    }
+
+    // A keystroke that narrows the rows draws only what changed: a row still
+    // listed keeps the row drawn for it. Drawing every row again at each
+    // edit held a frame of the Omnibar's opening past the budget on CI's
+    // slower machines (#938).
+    function test_omnibarNarrowingKeystrokeKeepsTheRowsThatStay() {
+        const homeSpaceId = browser.activeSpaceId;
+        const spaceId = browser.createSpace("Narrowing");
+        verify(browser.switchSpace(spaceId));
+        for (let tab = 0; tab < 4; ++tab)
+            browser.openInputInBackground("https://keep-" + tab + ".example/");
+        browser.openInputInBackground("https://kept-off.example/");
+        const panel = findChild(window.contentItem, "omnibar");
+        const input = findChild(window.contentItem, "omnibarInput");
+        const rows = findChild(window.contentItem, "omnibarRowList");
+        window.openOmnibar(false);
+        input.text = "ke";
+        const wide = omnibarRowsOf(panel, "tab");
+        compare(wide.length, 5);
+        const drawn = wide.map(function (row) {
+            return omnibarRowItem(rows, panel.rows.indexOf(row));
+        });
+
+        input.text = "kee";
+        const narrow = omnibarRowsOf(panel, "tab");
+        compare(narrow.length, 4);
+        narrow.forEach(function (row) {
+            verify(omnibarRowItem(rows, panel.rows.indexOf(row)) === drawn[wide.indexOf(row)],
+                   row.url + " was drawn again");
+        });
+
+        window.closeOmnibar();
+        verify(browser.switchSpace(homeSpaceId));
+        verify(browser.deleteSpace(spaceId, "Narrowing"));
+    }
+
+    // The list keeps the row Return would take as its current one, the row it
+    // scrolls into view, however the rows before it come and go.
+    function test_omnibarKeepsTheSelectedRowCurrentAsTheRowsChange() {
+        const homeSpaceId = browser.activeSpaceId;
+        const spaceId = browser.createSpace("Current row");
+        verify(browser.switchSpace(spaceId));
+        ["https://ab-one.example/", "https://ac-two.example/", "https://b-three.example/",
+        "https://ab-four.example/"].forEach(function (address) {
+            browser.openInputInBackground(address);
+        });
+        const panel = findChild(window.contentItem, "omnibar");
+        const input = findChild(window.contentItem, "omnibarInput");
+        const rows = findChild(window.contentItem, "omnibarRowList");
+        window.openOmnibar(false);
+        ["a", "ac", "a", "ab", "b"].forEach(function (text) {
+            input.text = text;
+            omnibarRowItem(rows, panel.rows.length - 1);
+            compare(rows.currentIndex, panel.selected, "the current row after \"" + text + "\"");
+        });
+
+        window.closeOmnibar();
+        verify(browser.switchSpace(homeSpaceId));
+        verify(browser.deleteSpace(spaceId, "Current row"));
+    }
+
+    // A row listed again beside itself is drawn in both places. In command
+    // scope, so no History answer lists the rows again meanwhile.
+    function test_omnibarDrawsARowListedTwiceTwice() {
+        const panel = findChild(window.contentItem, "omnibar");
+        const rows = findChild(window.contentItem, "omnibarRowList");
+        window.openCommandScope();
+        tryCompare(panel, "visible", true);
+        const row = {
+            "kind": "history",
+            "title": "Twice",
+            "url": "https://twice.example/"
+        };
+        panel.rows = [row];
+        compare(omnibarRowItem(rows, 0).modelData, row);
+        panel.rows = [row, row];
+        compare(omnibarRowItem(rows, 0).modelData, row);
+        compare(omnibarRowItem(rows, 1).modelData, row);
+        window.closeOmnibar();
     }
 
     // A site the Space loaded keeps its favicon after its tab closes, and a
@@ -17121,6 +17747,9 @@ TestCase {
 
     function test_settingsOwnsTheKeyboardUntilItCloses() {
         browser.openInput("about:blank", true);
+        // The Start page focuses its field a turn after it is shown, which
+        // would take the keyboard from Settings if it came after it opened.
+        wait(0);
         const settings = findChild(window.contentItem, "settingsSurface");
         const activeTab = browser.activeTabId;
         verify(settings !== null);
@@ -17806,10 +18435,9 @@ TestCase {
             return panel.newTabIntent;
         });
         compare(mode.text, "New Tab");
-        window.dismissStartPage();
-        tryVerify(function () {
-            return !window.startPageSummoned;
-        });
+        verify(window.omnibarOpen);
+        window.closeOmnibar();
+        tryCompare(panel, "visible", false);
     }
 
     // A command row's symbol is drawn in the accent: full on the selected row,
@@ -18146,9 +18774,11 @@ TestCase {
         leaveSpace(homeSpaceId, firstSpaceId, "Resting first");
     }
 
-    // A new tab is the Start page over the page on show, and the tab exists
-    // only once a destination is committed. Escape gives the page back.
+    // With the Start page asked for, a new tab is the Start page over the page
+    // on show, and the tab exists only once a destination is committed.
+    // Escape gives the page back.
     function test_aNewTabShowsTheStartPageAndCreatesItsTabOnCommit() {
+        window.setNewTabShowsStartPage(true);
         const engineLoader = findChild(window.contentItem, "engineLoader");
         const startPage = findChild(window.contentItem, "startPage");
         const panel = findChild(window.contentItem, "omnibar");
@@ -18202,9 +18832,689 @@ TestCase {
         browser.activateTab(pageTabId);
     }
 
-    // Choosing an open tab from the Start page switches to it and opens no
-    // tab of its own.
+    // A new tab asked for over a page opens the Omnibar over that page, as
+    // Primary+L does, heading to a new tab. The page stays under the glass,
+    // no tab exists until a destination is committed, and Escape leaves the
+    // page where it was.
+    function test_aNewTabOpensTheOmnibarOverThePageAndCreatesItsTabOnCommit() {
+        const engineLoader = findChild(window.contentItem, "engineLoader");
+        const startPage = findChild(window.contentItem, "startPage");
+        const panel = findChild(window.contentItem, "omnibar");
+        const input = findChild(window.contentItem, "omnibarInput");
+        const engine = openPage("https://before-new-tab-omnibar.example");
+        settleMotion();
+        activateWindow();
+        const pageTabId = browser.activeTabId;
+        const tabCount = browser.tabs.rowCount();
+        const startPageWatch = watchChanges(startPage, "open");
+
+        keyClick(Qt.Key_T, Qt.ControlModifier);
+        tryVerify(function () {
+            return window.omnibarOpen && input.activeFocus;
+        });
+        verify(!panel.resting);
+        verify(panel.newTabIntent);
+        compare(input.text, "");
+        compare(engineLoader.item, engine);
+        verify(engine.visible);
+        compare(browser.tabs.rowCount(), tabCount);
+        compare(browser.activeTabId, pageTabId);
+
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !window.omnibarOpen;
+        });
+        compare(browser.activeTabId, pageTabId);
+        compare(engineLoader.item, engine);
+        compare(browser.tabs.rowCount(), tabCount);
+
+        // The key map's `t` runs the same command.
+        window.commands.run("new-tab", -1);
+        tryVerify(function () {
+            return window.omnibarOpen && input.activeFocus;
+        });
+        verify(panel.newTabIntent);
+        input.text = "https://after-new-tab-omnibar.example";
+        keyClick(Qt.Key_Return);
+        tryVerify(function () {
+            return browser.tabs.rowCount() === tabCount + 1;
+        });
+        verify(browser.activeTabId !== pageTabId);
+        compare(browser.activeUrl.toString(), "https://after-new-tab-omnibar.example");
+        verify(!window.omnibarOpen);
+        verify(!startPageWatch.seen.some(function (open) {
+            return open;
+        }), "the Start page showed on the way");
+        stopWatching(startPageWatch);
+
+        browser.closeActiveTab();
+        browser.activateTab(pageTabId);
+        compare(browser.activeUrl.toString(), "https://before-new-tab-omnibar.example");
+    }
+
+    // Over a split the new tab's Omnibar stands over both panes, centred in
+    // the page area they share, and Escape leaves the split as it was.
+    function test_aNewTabOmnibarOverASplitStandsOverBothPanes() {
+        const startPage = findChild(window.contentItem, "startPage");
+        const viewport = findChild(window.contentItem, "engineViewport");
+        const panel = findChild(window.contentItem, "omnibar");
+        const frame = findChild(window.contentItem, "omnibarFrame");
+        const input = findChild(window.contentItem, "omnibarInput");
+        const firstTabId = browser.activeTabId;
+        openPageInNewTab("https://omnibar-split-left.example");
+        const leftTabId = browser.activeTabId;
+        openPageInNewTab("https://omnibar-split-right.example");
+        const rightTabId = browser.activeTabId;
+        verify(browser.addSplit(leftTabId));
+        tryCompare(browser, "splitOnShow", true);
+        settleMotion();
+        activateWindow();
+        const tabCount = browser.tabs.rowCount();
+
+        window.commands.run("new-tab", -1);
+        tryVerify(function () {
+            return window.omnibarOpen && input.activeFocus;
+        });
+        tryCompare(panel, "arrival", 1);
+        verify(!startPage.open);
+        verify(panel.newTabIntent);
+        const area = viewport.mapToItem(window.contentItem, 0, 0, viewport.width, viewport.height);
+        const field = frame.mapToItem(window.contentItem, 0, 0, frame.width, frame.height);
+        compare(field.width, Math.min(720, area.width - 32));
+        verify(Math.abs(field.x + field.width / 2 - (area.x + area.width / 2)) <= 1, "the field "
+               + field + " is not centred in the page area " + area);
+        // Its top edge 50 px above where the Start page's horizon would be.
+        const horizon = startPage.mapToItem(window.contentItem, 0, startPage.horizonY).y;
+        verify(Math.abs(field.y - (horizon - 50)) <= 1, "the field's top " + field.y
+               + " is not 50 px above the horizon at " + horizon);
+
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !window.omnibarOpen;
+        });
+        verify(browser.splitOnShow);
+        compare(browser.tabs.rowCount(), tabCount);
+
+        browser.closeTab(rightTabId);
+        browser.closeTab(leftTabId);
+        browser.activateTab(firstTabId);
+    }
+
+    // Where there is no page to show, a new tab is still the Start page's:
+    // the Omnibar at rest keeps the field and opens nothing over it.
+    function test_aNewTabInASpaceAtRestStaysOnTheStartPage() {
+        const startPage = findChild(window.contentItem, "startPage");
+        const panel = findChild(window.contentItem, "omnibar");
+        const input = findChild(window.contentItem, "omnibarInput");
+        const homeSpaceId = browser.activeSpaceId;
+        const restingSpaceId = enterRestingSpace("Resting new tab");
+        verify(!window.newTabShowsStartPage);
+
+        window.commands.run("new-tab", -1);
+        tryVerify(function () {
+            return input.activeFocus;
+        });
+        verify(startPage.open);
+        verify(panel.resting);
+        verify(!window.omnibarOpen);
+
+        leaveSpace(homeSpaceId, restingSpaceId, "Resting new tab");
+    }
+
+    // Closing the last tab leaves no page to show, so a new tab there is the
+    // Start page's too.
+    function test_aNewTabAfterTheLastTabClosesStaysOnTheStartPage() {
+        const startPage = findChild(window.contentItem, "startPage");
+        const panel = findChild(window.contentItem, "omnibar");
+        const input = findChild(window.contentItem, "omnibarInput");
+        const homeSpaceId = browser.activeSpaceId;
+        const spaceId = browser.createSpace("Last tab closed");
+        verify(browser.switchSpace(spaceId));
+        openPage("https://last-tab.example/");
+        browser.closeActiveTab();
+        tryVerify(function () {
+            return browser.atRest && window.pagelessViewport;
+        });
+        activateWindow();
+
+        window.commands.run("new-tab", -1);
+        tryVerify(function () {
+            return input.activeFocus;
+        });
+        verify(startPage.open);
+        verify(panel.resting);
+        verify(!window.omnibarOpen);
+
+        leaveSpace(homeSpaceId, spaceId, "Last tab closed");
+    }
+
+    // The Start page for a new tab is the reader's to ask for back, from
+    // Settings, beside the Scene it stands on, and the choice is kept as the
+    // other settings are.
+    function test_settingsBringBackTheStartPageForANewTab() {
+        const startPage = findChild(window.contentItem, "startPage");
+        const input = findChild(window.contentItem, "omnibarInput");
+        openPage("https://setting-new-tab.example");
+        settleMotion();
+        window.requestSettings();
+        const toggle = findChild(window.contentItem, "newTabShowsStartPage");
+        verify(toggle !== null);
+        verify(!toggle.checked);
+        toggle.clicked();
+        verify(window.newTabShowsStartPage);
+        verify(toggle.checked);
+        compare(browser.preference("new-tab-start-page", "false"), "true");
+        window.settingsOpen = false;
+        activateWindow();
+
+        window.commands.run("new-tab", -1);
+        tryVerify(function () {
+            return startPage.open && input.activeFocus;
+        });
+        verify(!window.omnibarOpen);
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !startPage.open;
+        });
+
+        window.requestSettings();
+        toggle.clicked();
+        verify(!window.newTabShowsStartPage);
+        compare(browser.preference("new-tab-start-page", "true"), "false");
+        window.settingsOpen = false;
+    }
+
+    // A value Sync brings, or an edit to settings.json, reaches the window
+    // while it runs, as the other settings do: the next new tab follows it.
+    function test_howANewTabOpensFollowsTheSettingChangedElsewhere() {
+        const startPage = findChild(window.contentItem, "startPage");
+        const input = findChild(window.contentItem, "omnibarInput");
+        openPage("https://setting-elsewhere.example");
+        settleMotion();
+        activateWindow();
+        verify(!window.newTabShowsStartPage);
+
+        browser.setPreference("new-tab-start-page", "true");
+        verify(window.newTabShowsStartPage);
+        window.commands.run("new-tab", -1);
+        tryVerify(function () {
+            return startPage.open && input.activeFocus;
+        });
+        verify(!window.omnibarOpen);
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !startPage.open;
+        });
+
+        browser.setPreference("new-tab-start-page", "false");
+        verify(!window.newTabShowsStartPage);
+    }
+
+    // The sidebar's "+ New tab" row, in window coordinates.
+    function newTabRowRect() {
+        const row = findChild(window.contentItem, "newTabRow");
+        verify(row !== null);
+        return row.mapToItem(null, 0, 0, row.width, row.height);
+    }
+
+    // The bottom of the last row the sidebar's tab list draws.
+    function lastDrawnRowBottom() {
+        const list = findChild(window.contentItem, "ordinaryList");
+        let bottom = -1;
+        for (let index = 0; index < list.children.length; ++index) {
+            const child = list.children[index];
+            if (child.visible && child.height > 0 && child.placeInSection !== undefined)
+                bottom = Math.max(bottom, child.mapToItem(null, 0, child.height).y);
+        }
+        return bottom;
+    }
+
+    // While the tabs fit, the "+ New tab" row follows the last of them, a
+    // gap and a rule below it, as wide as the list.
+    function test_theNewTabRowFollowsTheLastTab() {
+        openPageInNewTab("https://new-tab-row-follows.example");
+        settleMotion();
+        const row = findChild(window.contentItem, "newTabRow");
+        verify(row !== null);
+        tryVerify(function () {
+            return row.visible;
+        });
+        const rect = newTabRowRect();
+        const last = lastDrawnRowBottom();
+        verify(last > 0);
+        verify(rect.y >= last && rect.y <= last + 16, "the row's top " + rect.y
+               + " is not just under the last tab's bottom " + last);
+        const list = findChild(window.contentItem, "ordinaryList");
+        const listRect = list.mapToItem(null, list.leftPadding, 0, list.width - list.leftPadding
+                                        - list.rightPadding, list.height);
+        compare(rect.x, listRect.x);
+        compare(rect.width, listRect.width);
+        browser.closeActiveTab();
+    }
+
+    // Once the tabs overflow, the row stays at the list's bottom edge and the
+    // tabs scroll above it, ending where it starts.
+    function test_theNewTabRowStaysAtTheFootOfAnOverflowingList() {
+        const tabScroll = findChild(window.contentItem, "tabScroll");
+        const listLayer = findChild(window.contentItem, "listLayer");
+        const tabList = tabScroll.contentItem;
+        const opened = [];
+        for (let index = 0; index < 40; ++index) {
+            browser.openInput("https://new-tab-row-overflow.example/" + index, true);
+            opened.push(browser.activeTabId);
+        }
+        tryVerify(function () {
+            return tabList.contentHeight > tabList.height;
+        });
+        settleMotion();
+        const rect = newTabRowRect();
+        const layer = listLayer.mapToItem(null, 0, 0, listLayer.width, listLayer.height);
+        compare(rect.y + rect.height, layer.y + layer.height - 12);
+        const scrolled = tabScroll.mapToItem(null, 0, 0, tabScroll.width, tabScroll.height);
+        compare(scrolled.y + scrolled.height, rect.y);
+
+        // Scrolled to its end, the list's last tab still ends above the row.
+        tabList.contentY = tabList.contentHeight - tabList.height;
+        wait(0);
+        compare(newTabRowRect().y, rect.y);
+        verify(lastDrawnRowBottom() <= rect.y, "the last tab ends under the row");
+
+        for (const tabId of opened)
+            browser.closeTab(tabId);
+        tryVerify(function () {
+            return tabList.contentHeight <= tabList.height;
+        });
+    }
+
+    // A list that ends in a Folder has the row after the whole Folder, its
+    // last member included, and never inside it: open or collapsed, the row
+    // stands as wide as the list rather than indented as a member.
+    function test_theNewTabRowFollowsAFolderThatEndsTheList() {
+        const homeSpaceId = browser.activeSpaceId;
+        const spaceId = browser.createSpace("Folder at the end");
+        verify(browser.switchSpace(spaceId));
+        openPage("https://new-tab-row-folder.example/first");
+        const firstId = browser.activeTabId;
+        openPageInNewTab("https://new-tab-row-folder.example/second");
+        const secondId = browser.activeTabId;
+        const folder = browser.createFolder("Reading", [firstId, secondId]);
+        settleMotion();
+        const list = findChild(window.contentItem, "ordinaryList");
+        const listX = list.mapToItem(null, list.leftPadding, 0).x;
+
+        const lastMember = findChild(window.contentItem, "tab-" + secondId);
+        const memberBottom = lastMember.mapToItem(null, 0, lastMember.height).y;
+        let rect = newTabRowRect();
+        verify(rect.y >= memberBottom && rect.y <= memberBottom + 16, "the row's top " + rect.y
+               + " is not just under the Folder's last member " + memberBottom);
+        compare(rect.x, listX);
+
+        // Collapsed, the Folder keeps only its tab on show, and the row
+        // follows what is left of it.
+        const firstMember = findChild(window.contentItem, "tab-" + firstId);
+        verify(browser.setFolderCollapsed(folder, true));
+        tryVerify(function () {
+            return !firstMember.visible;
+        });
+        tryVerify(function () {
+            return lastDrawnRowBottom() < memberBottom;
+        }, 2000, "the Folder did not collapse to its tab on show");
+        settleMotion();
+        const drawnBottom = lastDrawnRowBottom();
+        tryVerify(function () {
+            rect = newTabRowRect();
+            return rect.y >= drawnBottom && rect.y <= drawnBottom + 16;
+        }, 2000, "the row did not follow the collapsed Folder");
+        compare(rect.x, listX);
+
+        leaveSpace(homeSpaceId, spaceId, "Folder at the end");
+    }
+
+    // A click on the row does what Primary+T does: the Omnibar over the page,
+    // heading to a new tab, or the Start page where the reader asked for it.
+    // A middle or right click does nothing, and no tab exists until a commit.
+    function test_aClickOnTheNewTabRowOpensANewTabAsPrimaryTDoes() {
+        const startPage = findChild(window.contentItem, "startPage");
+        const panel = findChild(window.contentItem, "omnibar");
+        const input = findChild(window.contentItem, "omnibarInput");
+        openPage("https://new-tab-row-click.example");
+        settleMotion();
+        activateWindow();
+        const pageTabId = browser.activeTabId;
+        const tabCount = browser.tabs.rowCount();
+        const pointer = findChild(window.contentItem, "newTabPointer");
+        verify(pointer !== null);
+        settleActions(pointer);
+
+        mouseClick(pointer, pointer.width / 2, pointer.height / 2, Qt.MiddleButton);
+        mouseClick(pointer, pointer.width / 2, pointer.height / 2, Qt.RightButton);
+        wait(50);
+        verify(!window.omnibarOpen);
+        verify(!startPage.open);
+        verify(!window.tabMenuOpen);
+        compare(browser.tabs.rowCount(), tabCount);
+
+        mouseClick(pointer, pointer.width / 2, pointer.height / 2);
+        tryVerify(function () {
+            return window.omnibarOpen && input.activeFocus;
+        });
+        verify(panel.newTabIntent);
+        verify(!startPage.open);
+        compare(browser.tabs.rowCount(), tabCount);
+        compare(browser.activeTabId, pageTabId);
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !window.omnibarOpen;
+        });
+
+        window.setNewTabShowsStartPage(true);
+        mouseClick(pointer, pointer.width / 2, pointer.height / 2);
+        tryVerify(function () {
+            return startPage.open && input.activeFocus;
+        });
+        verify(!window.omnibarOpen);
+        compare(browser.tabs.rowCount(), tabCount);
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !startPage.open;
+        });
+        compare(browser.activeTabId, pageTabId);
+    }
+
+    // A link dropped on the row finds nothing to take it: the drop is
+    // refused and no tab opens.
+    function test_aLinkDroppedOnTheNewTabRowDoesNothing() {
+        openPage("https://new-tab-row-drop.example");
+        settleMotion();
+        const tabCount = browser.tabs.rowCount();
+        const pageTabId = browser.activeTabId;
+        const rect = newTabRowRect();
+        const link = linkDragComponent.createObject(window.contentItem, {
+                                                        "x": rect.x + rect.width / 2,
+                                                        "y": rect.y + rect.height - 18
+                                                    });
+        verify(link !== null);
+        link.Drag.active = true;
+        link.x += 1;
+        link.y += 1;
+        wait(0);
+        compare(link.Drag.target, null);
+        compare(link.Drag.drop(), Qt.IgnoreAction);
+        link.destroy();
+        wait(50);
+        compare(browser.tabs.rowCount(), tabCount);
+        compare(browser.activeTabId, pageTabId);
+        verify(!window.omnibarOpen);
+    }
+
+    // Whether the tab's row is drawn as the tab on show: the wash, the
+    // bar, the lit favicon and the title in the text colour.
+    function tabDrawnOnShow(tabId) {
+        const row = findChild(window.contentItem, "tab-" + tabId);
+        const drawn = [findChild(row, "tabWash-" + tabId).visible, findChild(row, "tabBar-"
+                                                                             + tabId).visible,
+                       findChild(row, "siteTile-" + tabId).highlighted, String(findChild(row,
+                                                                                         "tabTitle-"
+                                                                                         + tabId).color)
+                       === String(window.colors.text)];
+        if (drawn.every(Boolean))
+            return true;
+        verify(!drawn.some(Boolean), "the tab is half drawn on show: " + drawn);
+        return false;
+    }
+
+    function newTabRowOnShow() {
+        const wash = findChild(window.contentItem, "newTabWash");
+        const bar = findChild(window.contentItem, "newTabBar");
+        compare(wash.visible && wash.color.a > 0.1, bar.visible);
+        return bar.visible;
+    }
+
+    // While a new tab's Omnibar or Start page is open and nothing is
+    // committed, the row is drawn as the tab on show is and that tab drops
+    // that look. Escape or a commit gives it back.
+    function test_theNewTabRowIsDrawnOnShowWhileANewTabWaits() {
+        const startPage = findChild(window.contentItem, "startPage");
+        const input = findChild(window.contentItem, "omnibarInput");
+        openPage("https://new-tab-row-mark.example");
+        settleMotion();
+        activateWindow();
+        const pageTabId = browser.activeTabId;
+        verify(tabDrawnOnShow(pageTabId));
+        verify(!newTabRowOnShow());
+
+        keyClick(Qt.Key_T, Qt.ControlModifier);
+        tryVerify(function () {
+            return window.omnibarOpen && input.activeFocus;
+        });
+        verify(newTabRowOnShow());
+        verify(!tabDrawnOnShow(pageTabId));
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !window.omnibarOpen;
+        });
+        verify(!newTabRowOnShow());
+        verify(tabDrawnOnShow(pageTabId));
+
+        // The Omnibar over the page for the address is not a new tab.
+        keyClick(Qt.Key_L, Qt.ControlModifier);
+        tryVerify(function () {
+            return window.omnibarOpen && input.activeFocus;
+        });
+        verify(!newTabRowOnShow());
+        verify(tabDrawnOnShow(pageTabId));
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !window.omnibarOpen;
+        });
+
+        keyClick(Qt.Key_T, Qt.ControlModifier);
+        tryVerify(function () {
+            return window.omnibarOpen && input.activeFocus;
+        });
+        input.text = "https://new-tab-row-mark.example/committed";
+        keyClick(Qt.Key_Return);
+        tryVerify(function () {
+            return browser.activeTabId !== pageTabId;
+        });
+        const committedId = browser.activeTabId;
+        verify(!newTabRowOnShow());
+        tryVerify(function () {
+            return tabDrawnOnShow(committedId);
+        });
+        verify(!tabDrawnOnShow(pageTabId));
+        browser.closeActiveTab();
+        browser.activateTab(pageTabId);
+
+        // The Start page for a new tab marks the row the same way, and a
+        // commit from it gives the look back while the page is still on its
+        // way.
+        window.setNewTabShowsStartPage(true);
+        keyClick(Qt.Key_T, Qt.ControlModifier);
+        tryVerify(function () {
+            return startPage.open && input.activeFocus;
+        });
+        verify(newTabRowOnShow());
+        verify(!tabDrawnOnShow(pageTabId));
+        input.text = "https://new-tab-row-mark.example/from-start-page";
+        keyClick(Qt.Key_Return);
+        tryVerify(function () {
+            return browser.activeTabId !== pageTabId;
+        });
+        verify(!newTabRowOnShow());
+        window.endStartPageDrive();
+        browser.closeActiveTab();
+        browser.activateTab(pageTabId);
+        tryVerify(function () {
+            return tabDrawnOnShow(pageTabId);
+        });
+    }
+
+    // With the sidebar's key labels showing, the row shows Primary+T's, over
+    // its plus as a tab's is over its favicon.
+    function test_theNewTabRowShowsPrimaryTsKeyLabel() {
+        openPage("https://new-tab-row-label.example");
+        settleMotion();
+        activateWindow();
+        const label = findChild(window.contentItem, "keyLabel-newTab");
+        verify(label !== null);
+        verify(!label.visible);
+
+        keyPress(Qt.Key_Control);
+        tryVerify(function () {
+            return label.visible;
+        });
+        const binding = bindingFor("new-tab");
+        verify(binding.indexOf("Primary+") === 0, binding);
+        verify(label.chord);
+        compare(label.text, binding.slice("Primary+".length));
+        const plus = findChild(window.contentItem, "newTabPlus");
+        const plusCentre = plus.mapToItem(null, plus.width / 2, plus.height / 2);
+        const labelCentre = label.mapToItem(null, label.width / 2, label.height / 2);
+        verify(Math.abs(plusCentre.x - labelCentre.x) <= 1 && Math.abs(plusCentre.y - labelCentre.y)
+               <= 1, "the label at " + labelCentre + " is not over the plus at " + plusCentre);
+        keyRelease(Qt.Key_Control);
+        verify(!label.visible);
+    }
+
+    // The row stands wherever the sidebar lists the reader's tabs. In a Space
+    // at rest it is the list's only row, with no rule, and drawn on show, since
+    // the Start page waits as a new tab. An Agent's Space has no row, and its
+    // tab keeps its own look. A Private window has the row too.
+    function test_theNewTabRowStandsWhereTheReadersTabsAreListed() {
+        const homeSpaceId = browser.activeSpaceId;
+        openPageInNewTab("https://new-tab-row-listed.example");
+        const listedTabId = browser.activeTabId;
+        settleMotion();
+        const row = findChild(window.contentItem, "newTabRow");
+        const rule = findChild(window.contentItem, "newTabRule");
+        verify(row.visible);
+        verify(rule.visible);
+
+        const emptyId = enterRestingSpace("No tabs yet");
+        verify(row.visible);
+        verify(!rule.visible);
+        compare(lastDrawnRowBottom(), -1);
+        const tabScroll = findChild(window.contentItem, "tabScroll");
+        compare(newTabRowRect().y, tabScroll.mapToItem(null, 0, 0).y);
+        verify(newTabRowOnShow());
+        leaveSpace(homeSpaceId, emptyId, "No tabs yet");
+        settleMotion();
+
+        const agentId = agentSpaceProbe.create("Row agent", "claude-code", false);
+        verify(browser.switchSpace(agentId));
+        tryCompare(findChild(window.contentItem, "sidebar"), "arriving", false);
+        openPage("https://new-tab-row-agent.example");
+        const agentTabId = browser.activeTabId;
+        verify(!row.visible);
+        verify(tabDrawnOnShow(agentTabId));
+        window.openOmnibar(true);
+        tryVerify(function () {
+            return window.omnibarOpen;
+        });
+        verify(tabDrawnOnShow(agentTabId));
+        window.closeOmnibar();
+        verify(browser.switchSpace(homeSpaceId));
+        verify(browser.deleteSpace(agentId, "Row agent"));
+        tryCompare(findChild(window.contentItem, "sidebar"), "arriving", false);
+        verify(row.visible);
+
+        windowManager.openPrivateWindow();
+        tryCompare(windowManager, "privateWindowCount", 1);
+        const privateWindow = window.privateWindows[0];
+        const privateRow = findChild(privateWindow.contentItem, "newTabRow");
+        verify(privateRow !== null);
+        tryVerify(function () {
+            return privateRow.visible;
+        });
+        privateWindow.windowBrowser.closeActiveTab();
+        tryCompare(windowManager, "privateWindowCount", 0);
+        tryVerify(function () {
+            return window.privateWindows.length === 0;
+        });
+        browser.closeTab(listedTabId);
+    }
+
+    // The row is the reader's to hide, from Interface, under the sidebar's
+    // side. The choice is kept as the other settings are, and a hidden row
+    // leaves the tab on show its look while a new tab waits.
+    function test_interfaceHidesTheSidebarsNewTabRow() {
+        const input = findChild(window.contentItem, "omnibarInput");
+        openPage("https://new-tab-row-setting.example");
+        settleMotion();
+        const pageTabId = browser.activeTabId;
+        const row = findChild(window.contentItem, "newTabRow");
+        verify(row.visible);
+        window.requestSettings();
+        const settings = findChild(window.contentItem, "settingsSurface");
+        settings.section = settings.sections.indexOf("interface");
+        const toggle = findChild(settings, "sidebarNewTab");
+        verify(toggle !== null);
+        verify(toggle.visible);
+        verify(toggle.checked);
+        compare(toggle.title, "New tab button in the sidebar");
+        // Next after the side, in the same column.
+        const side = findChild(settings, "sidebarSideRow");
+        verify(side !== null);
+        const sideRect = side.mapToItem(null, 0, 0, side.width, side.height);
+        const toggleRect = toggle.mapToItem(null, 0, 0, toggle.width, toggle.height);
+        verify(toggleRect.y >= sideRect.y + sideRect.height && toggleRect.y <= sideRect.y
+               + sideRect.height + 24, "the switch at " + toggleRect.y
+               + " is not next after the side's row, which ends at " + (sideRect.y
+                                                                        + sideRect.height));
+
+        toggle.clicked();
+        verify(!window.sidebarNewTab);
+        verify(!toggle.checked);
+        compare(browser.preference("sidebar-new-tab", "true"), "false");
+        window.settingsOpen = false;
+        tryVerify(function () {
+            return !row.visible;
+        });
+
+        // What the next start reads.
+        window.sidebarNewTab = true;
+        window.restoreChromeAppearance();
+        verify(!window.sidebarNewTab);
+
+        activateWindow();
+        keyClick(Qt.Key_T, Qt.ControlModifier);
+        tryVerify(function () {
+            return window.omnibarOpen && input.activeFocus;
+        });
+        verify(tabDrawnOnShow(pageTabId));
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !window.omnibarOpen;
+        });
+
+        window.requestSettings();
+        toggle.clicked();
+        verify(window.sidebarNewTab);
+        compare(browser.preference("sidebar-new-tab", "false"), "true");
+        window.settingsOpen = false;
+        tryVerify(function () {
+            return row.visible;
+        });
+    }
+
+    // A value Sync brings, or an edit to settings.json, shows or hides the row
+    // while the window runs.
+    function test_theNewTabRowFollowsTheSettingChangedElsewhere() {
+        const row = findChild(window.contentItem, "newTabRow");
+        verify(row.visible);
+        browser.setPreference("sidebar-new-tab", "false");
+        verify(!window.sidebarNewTab);
+        verify(!row.visible);
+        browser.setPreference("sidebar-new-tab", "true");
+        verify(window.sidebarNewTab);
+        verify(row.visible);
+    }
+
+    // With the Start page asked for, choosing an open tab from it switches to
+    // that tab and opens no tab of its own.
     function test_choosingAnOpenTabFromTheStartPageSwitchesToIt() {
+        window.setNewTabShowsStartPage(true);
         const startPage = findChild(window.contentItem, "startPage");
         const panel = findChild(window.contentItem, "omnibar");
         const input = findChild(window.contentItem, "omnibarInput");
@@ -18237,9 +19547,11 @@ TestCase {
         browser.activateTab(firstTabId);
     }
 
-    // Over a split the Start page covers both panes, which is where the tab it
-    // opens will land, and Escape brings the split back as it was.
+    // With the Start page asked for, over a split it covers both panes, which
+    // is where the tab it opens will land, and Escape brings the split back as
+    // it was.
     function test_aNewTabOverASplitCoversBothPanes() {
+        window.setNewTabShowsStartPage(true);
         const startPage = findChild(window.contentItem, "startPage");
         const input = findChild(window.contentItem, "omnibarInput");
         const firstTabId = browser.activeTabId;
@@ -18547,8 +19859,10 @@ TestCase {
     }
 
     // After a commit the road drives until the page first paints, for two
-    // seconds at most, and a failure ends it at once.
+    // seconds at most, and a failure ends it at once. The new tabs it asks for
+    // show the Start page, which is where the road is.
     function test_theRoadDrivesUntilFirstPaintAndStopsOnAnError() {
+        window.setNewTabShowsStartPage(true);
         const panel = findChild(window.contentItem, "omnibar");
         const engineLoader = findChild(window.contentItem, "engineLoader");
         const startPage = findChild(window.contentItem, "startPage");
@@ -18658,8 +19972,9 @@ TestCase {
 
     // A page the road drove to takes the keyboard when it first paints, and
     // when it is given up on at the limit, so the reader can scroll it with no
-    // click first.
+    // click first. The new tab it asks for shows the Start page.
     function test_thePageTakesTheKeyboardWhenTheRoadArrives() {
+        window.setNewTabShowsStartPage(true);
         const engineLoader = findChild(window.contentItem, "engineLoader");
         const input = findChild(window.contentItem, "omnibarInput");
         const homeSpaceId = browser.activeSpaceId;
@@ -18735,10 +20050,11 @@ TestCase {
         leaveSpace(homeSpaceId, restingSpaceId, "Resting dialog");
     }
 
-    // Asking for a new tab while the road still drives to the last one is
-    // being done with waiting: that page takes over and a new Start page
-    // stands over it.
+    // With the Start page asked for, asking for a new tab while the road still
+    // drives to the last one is being done with waiting: that page takes over
+    // and a new Start page stands over it.
     function test_aNewTabWhileTheRoadDrivesLetsThePageTakeOver() {
+        window.setNewTabShowsStartPage(true);
         const engineLoader = findChild(window.contentItem, "engineLoader");
         const startPage = findChild(window.contentItem, "startPage");
         const input = findChild(window.contentItem, "omnibarInput");

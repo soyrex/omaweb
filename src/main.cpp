@@ -9,6 +9,7 @@
 #include "ContentBlocker.h"
 #include "ControlSocket.h"
 #include "QtAgentInput.h"
+#include "QtPageScripts.h"
 #include "PageSnapshot.h"
 #include "WindowExposure.h"
 #include "ReleaseWatch.h"
@@ -19,6 +20,7 @@
 #include "DevelopmentLaunch.h"
 #include "DiagnosticOverrides.h"
 #include "ExternalProtocolHandler.h"
+#include "CssHighlighter.h"
 #include "FaviconTint.h"
 #include "DesktopTextScaling.h"
 #include "FontSettings.h"
@@ -30,6 +32,7 @@
 #include "EngineSuggestions.h"
 #include "GlobalPrivacyControl.h"
 #include "PageDarkening.h"
+#include "SiteStyles.h"
 #include "HttpsOnly.h"
 #include "SecureDns.h"
 #include "SettingsFile.h"
@@ -428,6 +431,7 @@ int main(int argc, char *argv[])
     // windows' shared one tell sites the same thing about the reader.
     omaweb::GlobalPrivacyControl globalPrivacyControl(configRoot());
     omaweb::PageDarkening pageDarkening(configRoot());
+    omaweb::SiteStyles siteStyles(configRoot());
     // Before any page asks for a name: the engine resolves names once for the
     // whole process, and the first lookup has to go where the reader chose.
     omaweb::SecureDns secureDns(configRoot());
@@ -608,6 +612,7 @@ int main(int argc, char *argv[])
 
     omaweb::registerBrowserController();
     omaweb::registerDownloads();
+    omaweb::registerCssHighlighter();
     omaweb::registerFaviconTint();
     omaweb::registerFontSettings();
     omaweb::registerEngineCapabilities();
@@ -645,6 +650,7 @@ int main(int argc, char *argv[])
     omaweb::registerInputMethodReport(&inputMethod);
     omaweb::registerLocaleReport(&localeReport);
     omaweb::registerQtAgentInput();
+    omaweb::registerQtPageScripts();
     // Fingers resting on the touchpad stop a page's glide, as in GTK 4 (#808).
     omaweb::QtPageGlide pageGlide;
     omaweb::TouchpadHold touchpadHold;
@@ -687,6 +693,7 @@ int main(int argc, char *argv[])
         QStringLiteral("globalPrivacyControl"), &globalPrivacyControl);
     engine.rootContext()->setContextProperty(QStringLiteral("httpsOnly"), &httpsOnly);
     engine.rootContext()->setContextProperty(QStringLiteral("pageDarkening"), &pageDarkening);
+    engine.rootContext()->setContextProperty(QStringLiteral("siteStyles"), &siteStyles);
     engine.rootContext()->setContextProperty(
         QStringLiteral("engineSuggestions"), &engineSuggestions);
     engine.rootContext()->setContextProperty(QStringLiteral("webRtcPolicy"), &webRtcPolicy);
