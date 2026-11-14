@@ -609,10 +609,18 @@ reports the gap and remains experimental rather than imitating behavior it canno
   it is `"darken-pages"` in `settings.json`, so an edit of the file applies at once and Sync carries
   it with the group's other settings. It reaches every Space and Private window. The engine darkens:
   Chromium's forced dark mode inverts the lightness of a background whose brightness is above 205 of
-  255, so white becomes `#121212`, `#f5f5f5` becomes `#222222` and `#d0d0d0` becomes `#3f3f3f`, and
-  it inverts the foregrounds, so `#222` text becomes `#f6f6f6` and a `#d4d4d8` element becomes
-  `#3b3b3e`, on any ground. A background at or below 205, such as `#cccccc`, `#6b7280` or `#18181b`,
-  is left as it is.
+  255, so white becomes `#121212` on x86_64, `#f5f5f5` becomes `#222222` and `#d0d0d0` becomes
+  `#3f3f3f`, and it inverts the foregrounds, so `#222` text becomes `#f6f6f6` and a `#d4d4d8`
+  element becomes `#3b3b3e`, on any ground. A background at or below 205, such as `#cccccc`,
+  `#6b7280` or `#18181b`, is left as it is.
+
+  On aarch64 white becomes `#1b1b1b`, and `#fcfcfc` becomes `#1e1e1e` rather than `#121212` (#936).
+  Chromium moves an inverted grey that dark to `#121212` only when its channels are equal to within
+  a float's epsilon. The aarch64 engine is built with GCC, which fuses multiplies and adds because
+  Chromium's `-ffp-contract=off` is not applied to QtWebEngine, and the channels land further apart
+  than that. The difference stays: the cover is already approximate, `#121212` over a `#fafafa` page
+  that x86_64 draws `#1f1f1f`. The engine fix is tracked in
+  villekivela/omaweb-qtwebengine-patches#34.
 
   A page whose own ground is already dark is left as written. The shell's wish stays the reader's:
   `darkenPage` is true while the switch is on and the site is not turned off, and the adapter
@@ -694,6 +702,71 @@ reports the gap and remains experimental rather than imitating behavior it canno
   page's ground as the white it is written in, so with Page darkening the cover is that colour with
   its lightness inverted, down to a floor of 7%: dark where the page is. The white a page without a
   ground is written against is drawn dark as well, since the engine darkens it.
+- A reader restyles a site with their own CSS, a Site style: one file per host in `styles/` in the
+  configuration directory. `github.com.css` styles github.com and every host under it, as a Link
+  rule's `*.github.com` matches, and a file for a narrower host, such as `gist.github.com.css`,
+  applies after it, so its rule wins a tie. A host is written as the reader reads it or as the DNS
+  does, and either matches. A file names no path, because a file name cannot hold one. Only
+  `<host>.css` is read: an editor's backup, a hidden file and a directory are left alone. The sheet
+  is in the page before the page renders, constructed as the cosmetic sheet is, so a page whose
+  policy refuses inline style takes it, and it comes after the page's own sheets, so the reader's
+  rule wins a tie with the page's. An IP address takes its own file alone, since its last numbers
+  are no domain, and an IPv6 address has none, because Qt reads a path that starts with a colon as
+  one of its resources. It applies in the reader's Spaces, in Private windows and in a window a page
+  opens, and with Content blocking off for the site, since a style is the reader's and not the
+  blocker's. It does not apply in an Agent Space, so an Agent reads a page as the site serves it; a
+  Space the reader takes over takes the styles at once. Saving a file restyles the site's open pages
+  without a reload, whether the editor writes in place or renames a new file over the old, and so
+  does removing one, and a page loading as the file is saved takes the saved one. It styles the
+  page's own document, not a frame from another site in it. Sync carries the files, a removal
+  included. A style a machine had before it first synced is kept over the repository's copy of the
+  same name, and a style edited on one machine and removed on another is kept with the edit. Two
+  machines that edit one style before either syncs keep one of the two edits, as they do for any
+  synced file.
+- The Site style panel writes a site's style from inside Omaweb. "Style this site" in the page menu
+  and in the Omnibar, and `Primary+Shift+S`, a command the reader can rebind, toggle it. It docks
+  opposite the sidebar, 400 pixels wide, on the right or on the left when the sidebar is on the
+  right, and the page narrows beside it. It stays open across navigation and tab switches and
+  follows the page on show, takes the keyboard when it opens, and is a region `Alt+H` and `Alt+L`
+  move to. It opens in the reader's Spaces and Private windows, whose edits write the same files,
+  and is not offered in an Agent Space, or for a page with no site a style can be written for: a
+  Start page, or an IPv6 address, which cannot name a file. A panel already open says so there.
+- The panel's host picker lists the page's host and each host above it that is still the site, and
+  says which already have a file. It writes the registrable site, `github.com` for
+  `gist.github.com`, unless the reader picks a narrower host, which stays picked on the site's pages
+  under it while the panel stands. An IP address and a name with no public suffix are their own
+  site.
+- The panel's editor is monospace CSS, coloured by comment, selector, property and value. Typing
+  restyles the site's pages at once, and the file is written 400 milliseconds after the typing
+  pauses, or when the browser quits, so the reader's own editor, the live reload and Sync see one
+  save. A note beside Open in editor says whether the typing is saved yet. Open in editor writes the
+  file if it has none and opens it with `omarchy-launch-editor`, or the desktop's handler without
+  Omarchy. An edit made to the file elsewhere shows in the panel. A save from outside, by the
+  reader's editor or by Sync, while the typing waits for its pause is kept and replaces the typing
+  in the panel rather than being written over.
+- Pick an element to hide starts the picker on the page on show. Hover highlights an element, and a
+  click picks it, and neither the click nor the picker's keys reach the page's elements. The page
+  cannot reach the picker's code, but it can see the highlight in its document, and a listener the
+  page put on the window to capture events first hears them before the picker does. While picking,
+  `Up` and `Down` move to the parent and back to the child, `Left` and `Right` to the siblings, `[`
+  and `]` narrow and widen, `Enter` hides and `Escape` stops. The panel shows the selector,
+  editable, how many elements it matches on the page, and a slider from this element to all related
+  ones that takes `Left`, `Right`, `[` and `]` too. A selector prefers a stable id, then classes and
+  attributes that a build tool did not generate, and uses `:nth-child` only where nothing else tells
+  the element from its siblings. The picker stops with the panel, the tab and the document.
+- A hidden element is an ordinary rule in the site's file, on a line of its own at the end:
+  `/* Hidden by Omaweb */ <selector> { display: none !important; }`. The panel reads those lines
+  back and lists each with how many elements it hides on the page, a preview that draws the page
+  without it and outlines what it hides, and an undo that takes out that line alone. No line the
+  reader wrote is rewritten. A selector that would close the rule, start another, open a comment or
+  a string, or run onto another line is refused, typed or picked, and a tag name a page made up is
+  escaped. Hiding what is hidden already adds no second line.
+- A Site style can be switched off in the panel or in Settings. Off is kept in `settings.json` as
+  `"site-styles": {"<host>": false}`, so it syncs and the file stays as it is.
+- Settings has a Site styles section after Content blocking that lists every style by host, with how
+  long it is, how many elements it hides, its switch, Edit and Remove, and opens the styles folder.
+  Edit opens the panel on that host over a page of it, or the file in the reader's editor where no
+  page of the host is open. Remove deletes the file and its switch.
 - The sidebar's width belongs to the reader. The seam between it and the page drags, and
   `Primary+Shift+]` and `Primary+Shift+[` move that same seam from the keyboard, so a resize never
   depends on a pointer. The width is clamped so a tab row stays readable and the page keeps at least
@@ -739,14 +812,41 @@ reports the gap and remains experimental rather than imitating behavior it canno
   theme, over the darkest and the lightest the road can put behind it. Over the road the glass blurs
   it heavily under a nearly opaque tint of the overlay, so the rows read cleanly, and over a page it
   blurs the page. The sun's light on the field's edge is drawn at half the website's strength.
-- `Primary+T` and `t` show the Start page in place of the page on show. Omaweb creates the tab only
-  after the user commits a destination. Choosing an open tab from it switches to that tab and
-  creates none. `Escape` brings back the page that was on show; in a Space at rest it releases the
-  field instead: the caret goes, the field is drawn unfocused and the keyboard is the browser's, so
-  every bare key of the key map works as over a page, and `o`, `Primary+L` or a click on the field
-  give the field back. In a split the Start page covers both panes, where the committed tab lands,
-  and `Escape` brings the split back. While the Start page is on show, `Primary+L` and `o` focus its
-  Omnibar.
+- `Primary+T` and `t` over a page open the Omnibar over it, as `Primary+L` does, with an empty field
+  and "New Tab" at its right end. The page stays under the Omnibar's glass. Omaweb creates the tab
+  only after the user commits a destination, and `Return` opens it in that new tab. Choosing an open
+  tab switches to that tab and creates none. `Escape` closes the Omnibar and leaves the page where
+  it was. In a split the Omnibar opens over both panes.
+- "New tab shows the Start page", a switch in Settings' interface section beside "Scene on the Start
+  page", is off by default, for a reader upgrading too. It is `"new-tab-start-page"` in
+  `settings.json`, and Sync carries it. With it on, `Primary+T` and `t` show the Start page in place
+  of the page on show instead, and the tab is created on commit in the same way.
+- Where there is no page to show, such as a Space at rest or after the last tab closes, the Start
+  page shows whatever the setting says, and `Primary+T` and `t` focus its Omnibar. `Escape` on a
+  Start page shown for a new tab brings back the page that was on show; in a Space at rest it
+  releases the field instead: the caret goes, the field is drawn unfocused and the keyboard is the
+  browser's, so every bare key of the key map works as over a page, and `o`, `Primary+L` or a click
+  on the field give the field back. In a split the Start page covers both panes, where the committed
+  tab lands, and `Escape` brings the split back. While the Start page is on show, `Primary+L` and
+  `o` focus its Omnibar.
+- The sidebar's tab list ends in a "+ New tab" row, so a new tab opens from the pointer as well as
+  from `Primary+T`, `t` and the command list. The row sits after the last tab, after the whole list
+  when it ends in a Folder, and never inside one. While the tabs fit it follows the last of them;
+  when they overflow it stays at the list's bottom edge and the tabs scroll above it. A thin rule
+  sits above it, left out when no tab stands above, and `+ New tab` is centred in it with no favicon
+  slot, in the sidebar's muted text, so it can't be taken for a tab. With the sidebar's key labels
+  showing, `Primary+T`'s stands over its plus. A click does what `Primary+T` does. A middle or right
+  click and a link dropped on it do nothing.
+- While a new tab's Omnibar or Start page is open and nothing is committed, the "+ New tab" row is
+  drawn as the tab on show is, with its wash and bar, and that tab is drawn as any other. `Escape`
+  or a commit gives the tab its look back. The row stands in the reader's Spaces and in a Private
+  window. In a Space at rest it is the list's only row, drawn on show while the Start page waits. An
+  Agent Space has none, and its tab keeps its look. A Tab window has no sidebar, so no row; the main
+  window's list keeps the row after the tabs Tab windows show.
+- "New tab button in the sidebar", a switch in Settings' interface section under "Sidebar side", is
+  on by default. It is `"sidebar-new-tab"` in `settings.json`, and Sync carries it. A change from
+  Sync or the file applies without a restart. Off, the row is gone, and the tab on show keeps its
+  mark while a new tab waits.
 - While there are results, a hint row under the Omnibar's field, over a rule, names the keys that
   work the list, as the website's dash does, with `?` and "shortcuts" at its right end: `↑↓` as key
   caps and "select", `↵` and "go", in 11 px dim text over a rule. Command scope says "run" for `↵`
@@ -865,17 +965,18 @@ reports the gap and remains experimental rather than imitating behavior it canno
 - A page is painted on the canvas every browser gives it: white, or the dark canvas the engine draws
   under a page that declares `color-scheme: dark`. A page that sets no background of its own is
   white under a dark theme, as its author saw it, unless Page darkening is on and the engine can
-  darken: then it is drawn on the dark canvas, `#121212`, for every site the reader has not turned
-  it off for, and the cover that stands in for it is dark too. The theme's colour is shown only
-  where no page has painted yet, from the moment a document is created until its first paint, so a
-  navigation under a dark theme never flashes a bright rectangle through the chrome, and the page on
-  show keeps its canvas while the next document is fetched.
+  darken: then it is drawn on the dark canvas, `#121212` (`#1b1b1b` on aarch64), for every site the
+  reader has not turned it off for, and the cover that stands in for it is dark too. The theme's
+  colour is shown only where no page has painted yet, from the moment a document is created until
+  its first paint, so a navigation under a dark theme never flashes a bright rectangle through the
+  chrome, and the page on show keeps its canvas while the next document is fetched.
 
 ## Daily browser operations
 
 - A two-finger horizontal touchpad swipe over a page goes Back for a positive scroll delta and
   Forward for a negative one, following the system's scroll direction. It commits once on release
-  after 120 logical pixels; returning towards the start below that distance cancels. An arrow
+  after 120 logical pixels or a flick faster than 1000 px/s towards that direction; otherwise it
+  cancels. Whichever axis first moves 6 logical pixels owns the gesture until release. An arrow
   follows the gesture without taking input or focus. Vertical scrolling, unphased wheel input,
   modified scrolling and synthetic glide never navigate. A content scroll chain that can consume
   that direction keeps the gesture, as does a horizontal overscroll containment policy. Frames,
@@ -1137,7 +1238,8 @@ The default browser commands include:
   `Primary+K` or `:` for the Omnibar's command scope.
 - `Alt+H`, `Alt+J`, `Alt+K` and `Alt+L` to move the keyboard between the regions on screen.
 - `Primary+Shift+I` for Developer tools, `Primary+Alt+C` to inspect an element, `Primary+Shift+C` to
-  copy the address of the page on show, and `Primary+Shift+L` for Site information.
+  copy the address of the page on show, `Primary+Shift+L` for Site information, and
+  `Primary+Shift+S` for the Site style panel.
 - `Primary+F` or `/` to find in the page, `Primary+G` or `n` for the next match and
   `Primary+Shift+G` or `N` for the previous one.
 - `Primary+=`, `Primary+-` and `Primary+0` to zoom the tab in, out and back to 100 percent.

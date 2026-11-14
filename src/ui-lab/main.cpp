@@ -9,12 +9,14 @@
 #include "EngineSuggestions.h"
 #include "GlobalPrivacyControl.h"
 #include "PageDarkening.h"
+#include "SiteStyles.h"
 #include "SecureDns.h"
 #include "SettingsFile.h"
 #include "WebRtcPolicy.h"
 #include "ReleaseWatch.h"
 #include "EngineCapabilities.h"
 #include "PageImages.h"
+#include "CssHighlighter.h"
 #include "FaviconTint.h"
 #include "FontSettings.h"
 #include "DesktopTextScaling.h"
@@ -348,6 +350,57 @@ void seedSampleTabs(omaweb::BrowserController &browser, const QVariantList &favi
     browser.activateTab(shownTabId);
 }
 
+// The ordinary tabs `--many-tabs` adds to the sample day: more than the
+// sidebar's list holds, so it scrolls under the "+ New tab" row at its foot.
+void seedManyTabs(
+    omaweb::BrowserController &browser, const QVariantList &favicons, const QVariantMap &siteIcons)
+{
+    static const QList<SampleTab> more = {
+        {"https://wiki.archlinux.org/title/Wayland", "Wayland - ArchWiki", false},
+        {"https://hyprland.org/news/", "Hyprland news", false},
+        {"https://doc.qt.io/qt-6/qml-qtquick-flow.html", "Flow QML Type", false},
+        {"https://news.ycombinator.com/", "Hacker News", false},
+        {"https://github.com/basecamp/omarchy", "basecamp/omarchy", false},
+        {"https://developer.mozilla.org/en-US/docs/Web/CSS", "CSS: Cascading Style Sheets", false},
+        {"https://lwn.net/", "LWN.net", false},
+        {"https://wayland.freedesktop.org/docs/html/", "Wayland documentation", false},
+        {"https://mail.proton.me/u/0/sent", "Sent", false},
+        {"https://doc.qt.io/qt-6/qml-qtquick-controls-scrollview.html", "ScrollView QML Type",
+            false},
+        {"https://archlinux.org/news/", "Arch Linux - News", false},
+        {"https://doc.qt.io/qt-6/qtquick-index.html", "Qt Quick", false},
+    };
+    const auto shown = browser.activeTabId();
+    auto *unpinned = browser.unpinnedTabs();
+    qsizetype icon = 0;
+    for (const auto &sample : more) {
+        const QUrl url(QString::fromUtf8(sample.url));
+        browser.openInputInBackground(url);
+        const auto tabId = lastTabId(unpinned);
+        if (tabId.isEmpty()) {
+            continue;
+        }
+        browser.reportTabPageState(tabId, url, QString::fromUtf8(sample.title),
+            sampleFavicon(url, siteIcons, favicons, icon), false, false);
+    }
+    browser.activateTab(shown);
+}
+
+// `--folders` puts the sample day's ordinary tabs in two Folders, the first
+// collapsed, so the list ends in a Folder.
+void seedFolders(omaweb::BrowserController &browser)
+{
+    auto *unpinned = browser.unpinnedTabs();
+    QStringList ids;
+    for (auto row = 0; row < unpinned->rowCount(); ++row) {
+        ids.append(tabIdAt(unpinned, row));
+    }
+    ids.removeAll(QString());
+    const auto first = browser.createFolder(QStringLiteral("Omaweb"), ids.mid(0, 2));
+    browser.setFolderCollapsed(first, true);
+    browser.createFolder(QStringLiteral("Reading"), ids.mid(2));
+}
+
 // Two more Spaces, each with a page or two of its own, so that switching
 // Space has somewhere to go. The first Space is put back on show at the
 // end. This runs before the QML loads: a switch with the interface up tears
@@ -661,6 +714,7 @@ int main(int argc, char *argv[])
 
     omaweb::registerBrowserController();
     omaweb::registerDownloads();
+    omaweb::registerCssHighlighter();
     omaweb::registerFaviconTint();
     omaweb::registerFontSettings();
     omaweb::registerEngineCapabilities();
@@ -763,6 +817,28 @@ int main(int argc, char *argv[])
         QStringLiteral("globalPrivacyControl"), &globalPrivacyControl);
     static omaweb::PageDarkening pageDarkening(dataRootPath);
     engine.rootContext()->setContextProperty(QStringLiteral("pageDarkening"), &pageDarkening);
+    static omaweb::SiteStyles siteStyles(dataRootPath);
+    // `--site-style-sample` writes the styles a reader has after a while: one
+    // for the documentation page's site with two hidden elements, one for a
+    // host under another, and one switched off. Settings lists them, and the
+    // Site style panel opens on one.
+    if (arguments.contains(QStringLiteral("--site-style-sample"))) {
+        siteStyles.edit(QStringLiteral("qt.io"),
+            QStringLiteral(
+                "/* Wider measure, quieter links */\narticle {\n  max-width: 64rem;\n}\n\n"
+                "a:not(:hover) {\n  text-decoration: none;\n}\n"));
+        siteStyles.hide(QStringLiteral("qt.io"), QStringLiteral(".cookie-notice"));
+        siteStyles.hide(QStringLiteral("qt.io"), QStringLiteral("#feedback-widget"));
+        siteStyles.edit(
+            QStringLiteral("github.com"), QStringLiteral("body { font-size: 15px; }\n"));
+        siteStyles.hide(QStringLiteral("github.com"), QStringLiteral(".js-notice"));
+        siteStyles.edit(
+            QStringLiteral("gist.github.com"), QStringLiteral(".file { max-width: none; }\n"));
+        siteStyles.edit(QStringLiteral("news.ycombinator.com"),
+            QStringLiteral("td { font-family: serif; }\n.title { font-size: 16px; }\n"));
+        siteStyles.setEnabled(QStringLiteral("news.ycombinator.com"), false);
+    }
+    engine.rootContext()->setContextProperty(QStringLiteral("siteStyles"), &siteStyles);
     static omaweb::WebRtcPolicy webRtcPolicy(dataRootPath);
     static omaweb::SecureDns secureDns(dataRootPath);
     engine.rootContext()->setContextProperty(QStringLiteral("secureDns"), &secureDns);
@@ -1155,8 +1231,24 @@ int main(int argc, char *argv[])
     // section nor the tab list, so the sidebar that distinguishes this browser
     // is the one thing a capture of it cannot show. `--tabs` seeds a day.
     if (arguments.contains(QStringLiteral("--tabs"))) {
+        const auto blankTabId = tabIdAt(browser.unpinnedTabs(), 0);
         seedSampleTabs(
             browser, mockFavicons, siteIcons, browse ? QString::fromUtf8(browsedTab) : QString());
+        // `--blank-tab-page` gives the blank tab the lab starts on a page of
+        // its own, so the list holds pages only, as a reader's does once the
+        // Omnibar opens a new tab's page itself.
+        if (arguments.contains(QStringLiteral("--blank-tab-page"))) {
+            const QUrl page(QStringLiteral("https://hypr.land/"));
+            qsizetype icon = 3;
+            browser.reportTabPageState(blankTabId, page, QStringLiteral("Hyprland"),
+                sampleFavicon(page, siteIcons, mockFavicons, icon), false, false);
+        }
+        if (arguments.contains(QStringLiteral("--many-tabs"))) {
+            seedManyTabs(browser, mockFavicons, siteIcons);
+        }
+        if (arguments.contains(QStringLiteral("--folders"))) {
+            seedFolders(browser);
+        }
     }
     // `--put-away` has the sample day's ordinary tabs last shown one by one
     // over the past few days, then lets the check put away those past twelve
@@ -1194,6 +1286,15 @@ int main(int argc, char *argv[])
     if (arguments.contains(QStringLiteral("--narrow")) && !engine.rootObjects().isEmpty()) {
         auto *window = engine.rootObjects().constFirst();
         window->setProperty("sidebarWidth", window->property("sidebarMinimumWidth"));
+    }
+    // `--key-labels` shows the sidebar's key labels as holding Primary does,
+    // which a capture has no key to hold for.
+    if (arguments.contains(QStringLiteral("--key-labels")) && !engine.rootObjects().isEmpty()) {
+        auto *sidebar
+            = engine.rootObjects().constFirst()->findChild<QObject *>(QStringLiteral("sidebar"));
+        if (sidebar != nullptr) {
+            sidebar->setProperty("keyLabelsShown", true);
+        }
     }
     // The Status island's marks, for review (#838). `--no-release` leaves the
     // lab's release unannounced, `--release <version>` announces that version,
@@ -1484,6 +1585,14 @@ int main(int argc, char *argv[])
             {QStringLiteral("page-menu:selection"), {}},
             {QStringLiteral("history-back"), {}},
             {QStringLiteral("history-forward"), {}},
+            // The Site style panel over the documentation page, with its host
+            // picker open, or with the picker on the page's diagram.
+            {QStringLiteral("site-style"), {}},
+            {QStringLiteral("site-style:hosts"), {}},
+            {QStringLiteral("site-style:pick"), {}},
+            {QStringLiteral("site-style:pick-wide"), {}},
+            // The same panel with the site's style switched off.
+            {QStringLiteral("site-style:off"), {}},
         };
         const auto requested = arguments.at(showIndex + 1);
         auto *root = engine.rootObjects().constFirst();
@@ -1495,6 +1604,46 @@ int main(int argc, char *argv[])
             if (!tabId.isEmpty()) {
                 browser.activateTab(tabId);
             }
+        }
+        const auto siteStyle = requested.startsWith(QLatin1String("site-style"));
+        if (siteStyle) {
+            auto *tabs = browser.unpinnedTabs();
+            for (int row = 0; row < tabs->rowCount(); ++row) {
+                const auto index = tabs->index(row, 0);
+                if (tabs->data(index, omaweb::TabListModel::UrlRole).toUrl().host()
+                    == u"doc.qt.io") {
+                    browser.activateTab(tabs->data(index, omaweb::TabListModel::IdRole).toString());
+                }
+            }
+            if (requested == u"site-style:off") {
+                siteStyles.setEnabled(QStringLiteral("qt.io"), false);
+            }
+            QTimer::singleShot(300, root, [root, requested] {
+                QMetaObject::invokeMethod(root, "toggleSiteStylePanel");
+                auto *panel = root->findChild<QObject *>(QStringLiteral("siteStylePanel"));
+                auto *host = root->findChild<QObject *>(QStringLiteral("engineLoader"));
+                auto *view = host ? host->property("item").value<QObject *>() : nullptr;
+                if (panel == nullptr || view == nullptr) {
+                    qCritical("No page to style for --show %s; pass --tabs", qPrintable(requested));
+                    return;
+                }
+                if (requested == u"site-style:hosts") {
+                    if (auto *hosts
+                        = panel->findChild<QObject *>(QStringLiteral("siteStyleHosts"))) {
+                        hosts->setProperty("visible", true);
+                    }
+                } else if (requested.startsWith(QLatin1String("site-style:pick"))) {
+                    const auto wide = requested == u"site-style:pick-wide";
+                    QMetaObject::invokeMethod(view, "startPicking");
+                    const QVariantMap picked {{QStringLiteral("selector"),
+                                                  wide ? QStringLiteral("article .figure")
+                                                       : QStringLiteral("#scene-graph-diagram")},
+                        {QStringLiteral("count"), wide ? 2 : 1},
+                        {QStringLiteral("level"), wide ? 1 : 0}, {QStringLiteral("levels"), 3},
+                        {QStringLiteral("valid"), true}};
+                    QMetaObject::invokeMethod(view, "simulatePick", Q_ARG(QVariant, picked));
+                }
+            });
         }
         // Both are asked by the page on show rather than set on the window.
         const auto securityKey = requested.startsWith(QLatin1String("security-key:"));
@@ -1963,7 +2112,7 @@ QtObject {
                         .evaluate();
                 });
             });
-        } else if (state.isEmpty() && !pageAsks) {
+        } else if (state.isEmpty() && !pageAsks && !siteStyle) {
             qCritical("Unknown --show state %s", qPrintable(requested));
             return 1;
         }

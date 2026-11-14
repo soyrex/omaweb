@@ -131,6 +131,8 @@ Rectangle {
     // Whether pages with no dark theme are darkened, browser-wide, and whether
     // the engine can do it at all (the PageDarkening capability).
     property var pageDarkening: null
+    // The reader's site styles (`SiteStyles`), which the tests run without.
+    property var siteStyles: null
     property bool pageDarkeningAvailable: true
     // Whether the Omnibar asks a search engine for Engine suggestions,
     // browser-wide like the switches above.
@@ -172,6 +174,8 @@ Rectangle {
     property string appIcon: "black-and-white"
     property string sidebarSide: "left"
     property bool glanceEnabled: true
+    property bool newTabShowsStartPage: false
+    property bool sidebarNewTab: true
     property bool spaceColours: true
     // The Start page's Scene, by its id, or "none".
     property string startPageScene: "crt-road"
@@ -225,13 +229,13 @@ Rectangle {
 
     // The keys the rest of the chrome finds a section by, and what the rail
     // calls each one, in the same order.
-    readonly property var sections: ["tabs", "interface", "keyboard", "content blocking", "network",
-        "downloads", "search", "privacy", "addresses", "payment cards", "spaces", "agents",
-        "extensions", "sync", "about"]
+    readonly property var sections: ["tabs", "interface", "keyboard", "content blocking",
+        "site styles", "network", "downloads", "search", "privacy", "addresses", "payment cards",
+        "spaces", "agents", "extensions", "sync", "about"]
     readonly property var sectionTitles: [qsTr("tabs"), qsTr("interface"), qsTr("keyboard"), qsTr("content blocking"),
-        qsTr("network"), qsTr("downloads"), qsTr("search"), qsTr("privacy"), qsTr("addresses"), qsTr(
-            "payment cards"), qsTr("spaces"), qsTr("agents"), qsTr("extensions"), qsTr("sync"), qsTr(
-            "about")]
+        qsTr("site styles"), qsTr("network"), qsTr("downloads"), qsTr("search"), qsTr("privacy"),
+        qsTr("addresses"), qsTr("payment cards"), qsTr("spaces"), qsTr("agents"), qsTr("extensions"), qsTr(
+            "sync"), qsTr("about")]
 
     // The rail is as wide as the longest section name it draws, measured in the
     // bold face the current section takes so the pane beside it does not shift
@@ -456,11 +460,30 @@ Rectangle {
     // Space: every Space loads the same package, and what they keep apart is
     // the storage the extension writes.
     signal knownExtensionToggled(string key, bool enabled)
+    // What a site style's row says under its host: how long it is, how many
+    // elements it hides, and whether it is off.
+    function siteStyleNote(style) {
+        const lines = style.lines === 1 ? qsTr("1 line") : qsTr("%n lines", "", style.lines);
+        const hidden = style.hidden === 1 ? qsTr("1 hidden") : qsTr("%n hidden", "", style.hidden);
+        if (style.hidden === 0)
+            return style.enabled ? lines : qsTr("%1 · off", "a site style: its length · off").arg(
+                                       lines);
+        if (style.enabled)
+            return qsTr("%1 · %2", "a site style: its length · how many it hides").arg(lines).arg(
+                        hidden);
+        return qsTr("%1 · %2 · off", "a site style: its length · how many it hides · off").arg(
+                    lines).arg(hidden);
+    }
+
+    // A site style's Edit: the panel on that host, or its file.
+    signal siteStyleEdited(string host)
     signal useFaviconsToggled(bool enabled)
     signal tintFaviconsToggled(bool enabled)
     signal appIconChosen(string icon)
     signal sidebarSideChosen(string side)
     signal glanceToggled(bool enabled)
+    signal newTabShowsStartPageToggled(bool enabled)
+    signal sidebarNewTabToggled(bool enabled)
     signal spaceColoursToggled(bool enabled)
     signal startPageSceneChosen(string scene)
     signal startPageGlassToggled(bool enabled)
@@ -1316,6 +1339,7 @@ Rectangle {
                     }
 
                     SettingRow {
+                        objectName: "sidebarSideRow"
                         width: pane.width
                         colors: root.colors
                         title: qsTr("Sidebar side")
@@ -1345,6 +1369,19 @@ Rectangle {
                     }
 
                     SettingToggle {
+                        objectName: "sidebarNewTab"
+                        enabled: root.settingsWritable
+                        width: pane.width
+                        colors: root.colors
+                        title: qsTr("New tab button in the sidebar")
+                        note: qsTr(
+                                  "A row after the sidebar's tabs that opens a new tab with a click.")
+                        accessibleName: qsTr("New tab button in the sidebar")
+                        checked: root.sidebarNewTab
+                        onClicked: root.sidebarNewTabToggled(!checked)
+                    }
+
+                    SettingToggle {
                         objectName: "glanceEnabled"
                         enabled: root.settingsWritable
                         width: pane.width
@@ -1355,6 +1392,18 @@ Rectangle {
                         accessibleName: qsTr("Glance at a page's new tabs")
                         checked: root.glanceEnabled
                         onClicked: root.glanceToggled(!checked)
+                    }
+
+                    SettingToggle {
+                        objectName: "newTabShowsStartPage"
+                        enabled: root.settingsWritable
+                        width: pane.width
+                        colors: root.colors
+                        title: qsTr("New tab shows the Start page")
+                        note: qsTr("Off, a new tab opens the Omnibar over the page on show.")
+                        accessibleName: qsTr("New tab shows the Start page")
+                        checked: root.newTabShowsStartPage
+                        onClicked: root.newTabShowsStartPageToggled(!checked)
                     }
 
                     // The thumbnails stand in a row of their own under the
@@ -2210,11 +2259,115 @@ Rectangle {
                     }
                 }
 
-                // ---- network -----------------------------------------------
+                // ---- site styles ---------------------------------------------
 
                 Column {
                     width: pane.width
                     visible: root.section === 4
+                    spacing: pane.spacing
+
+                    Text {
+                        text: qsTr("Site styles")
+                        color: root.colors.text
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.display
+                    }
+
+                    Text {
+                        width: pane.width
+                        wrapMode: Text.WordWrap
+                        color: root.colors.mutedText
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                        text: qsTr(
+                                  "Your own CSS for a site, one file for each host in styles/ in the configuration folder. A file styles its host and every host under it. Switching one off keeps the file, and Sync carries both. Write one from a page with Style this site.")
+                    }
+
+                    Column {
+                        width: pane.width
+                        spacing: 0
+
+                        Repeater {
+                            model: root.section === 4 && root.siteStyles ? root.siteStyles.styles :
+                                                                           []
+
+                            SettingRow {
+                                id: styleRow
+                                required property var modelData
+
+                                objectName: "siteStyle-" + modelData.host
+                                width: pane.width
+                                colors: root.colors
+                                title: modelData.host
+                                note: root.siteStyleNote(modelData)
+
+                                Row {
+                                    spacing: Style.spacing.lg
+
+                                    ActionButton {
+                                        objectName: "editSiteStyle"
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        colors: root.colors
+                                        label: qsTr("Edit", "verb: edit a site style")
+                                        accessibleName: qsTr("Edit the style for %1").arg(
+                                                            styleRow.modelData.host)
+                                        onClicked: root.siteStyleEdited(styleRow.modelData.host)
+                                    }
+
+                                    ActionButton {
+                                        objectName: "removeSiteStyle"
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        colors: root.colors
+                                        label: qsTr("Remove")
+                                        accessibleName: qsTr("Remove the style for %1").arg(
+                                                            styleRow.modelData.host)
+                                        destructive: true
+                                        onClicked: root.siteStyles.remove(styleRow.modelData.host)
+                                    }
+
+                                    Omarchy.ToggleSwitch {
+                                        objectName: "siteStyleRowSwitch"
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        checked: styleRow.modelData.enabled
+                                        foreground: root.colors.text
+                                        accent: root.colors.accent
+                                        onToggled: root.siteStyles.setEnabled(
+                                                       styleRow.modelData.host,
+                                                       !styleRow.modelData.enabled)
+                                        Accessible.role: Accessible.Switch
+                                        Accessible.name: qsTr("Apply the style for %1").arg(
+                                                             styleRow.modelData.host)
+                                        Accessible.checked: checked
+                                    }
+                                }
+                            }
+                        }
+
+                        SettingRow {
+                            objectName: "noSiteStyles"
+                            width: pane.width
+                            visible: !root.siteStyles || root.siteStyles.styles.length === 0
+                            colors: root.colors
+                            title: qsTr("No site styles yet")
+                            note: qsTr(
+                                      "Style this site, from the page menu or the Omnibar, writes the first one.")
+                        }
+                    }
+
+                    ActionButton {
+                        objectName: "openStylesFolder"
+                        colors: root.colors
+                        label: qsTr("Open the styles folder")
+                        enabled: root.siteStyles !== null
+                        onClicked: root.siteStyles.openFolder()
+                    }
+                }
+
+                // ---- network -----------------------------------------------
+
+                Column {
+                    width: pane.width
+                    visible: root.section === 5
                     spacing: 0
 
                     // Browser-wide and off by default: on, what is typed in
@@ -2260,7 +2413,7 @@ Rectangle {
 
                 Column {
                     width: pane.width
-                    visible: root.section === 5
+                    visible: root.section === 6
                     spacing: 0
 
                     SettingRow {
@@ -2282,7 +2435,7 @@ Rectangle {
                     }
 
                     Repeater {
-                        model: root.section === 5 ? root.downloads : null
+                        model: root.section === 6 ? root.downloads : null
 
                         SettingRow {
                             id: downloadRow
@@ -2387,7 +2540,7 @@ Rectangle {
 
                 Column {
                     width: pane.width
-                    visible: root.section === 6
+                    visible: root.section === 7
                     spacing: pane.spacing
 
                     Column {
@@ -2397,7 +2550,7 @@ Rectangle {
                         Repeater {
                             id: searchEngineList
                             objectName: "searchEngineList"
-                            model: root.section === 6 ? root.engines : []
+                            model: root.section === 7 ? root.engines : []
 
                             SettingRow {
                                 required property var modelData
@@ -2566,7 +2719,7 @@ Rectangle {
 
                 Column {
                     width: pane.width
-                    visible: root.section === 7
+                    visible: root.section === 8
                     spacing: pane.spacing
 
                     // The section is named for what it will hold rather than
@@ -2898,7 +3051,7 @@ Rectangle {
                 // engine's sit in their section.
                 Column {
                     width: pane.width
-                    visible: root.section === 8
+                    visible: root.section === 9
                     spacing: pane.spacing
 
                     Column {
@@ -2908,7 +3061,7 @@ Rectangle {
                         Repeater {
                             id: addressList
                             objectName: "addressList"
-                            model: root.section === 8 ? root.savedAddresses : []
+                            model: root.section === 9 ? root.savedAddresses : []
 
                             SettingRow {
                                 required property var modelData
@@ -3272,7 +3425,7 @@ Rectangle {
 
                 Column {
                     width: pane.width
-                    visible: root.section === 10
+                    visible: root.section === 11
                     spacing: pane.spacing
 
                     SettingToggle {
@@ -3728,7 +3881,7 @@ Rectangle {
                 Column {
                     id: agentsSection
                     width: pane.width
-                    visible: root.section === 11
+                    visible: root.section === 12
                     spacing: 0
 
                     readonly property bool setupShown: !!root.agentControl
@@ -3892,7 +4045,7 @@ Rectangle {
 
                 Column {
                     width: pane.width
-                    visible: root.section === 12
+                    visible: root.section === 13
                     spacing: pane.spacing
 
                     Text {
@@ -3957,7 +4110,7 @@ Rectangle {
                         visible: root.knownExtensionsAvailable && !root.privateWindow
 
                         Repeater {
-                            model: root.section === 12 ? root.knownExtensions : []
+                            model: root.section === 13 ? root.knownExtensions : []
 
                             SettingToggle {
                                 required property var modelData
@@ -3993,7 +4146,7 @@ Rectangle {
 
                 Column {
                     width: pane.width
-                    visible: root.section === 13
+                    visible: root.section === 14
                     spacing: pane.spacing
 
                     Text {
@@ -4317,7 +4470,7 @@ Rectangle {
 
                 Column {
                     width: pane.width
-                    visible: root.section === 14
+                    visible: root.section === 15
                     spacing: pane.spacing
 
                     Text {

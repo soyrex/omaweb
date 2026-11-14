@@ -104,11 +104,13 @@ so a jump back returns to it. Each half of a split is its own entry. Each Space 
 survives a switch to another Space and back. _Avoid_: Tab history, recent tabs, tab stack, last tab
 
 **Start page**: What Omaweb shows where a webpage would be when there is none to show: a Space at
-rest, `about:blank`, and a new-tab request that has no destination yet. It is the Omnibar at rest
-above the road's horizon, centred in the page area, focused, over the CRT road, a Scene that fills
-the page area, drawn as the website draws it in a viewport of that size, and never runs under the
-sidebar. It costs no engine. A new-tab request shows it over the page on show, and `Escape` gives
-that page back. _Avoid_: Home page, new tab page, about:blank, speed dial
+rest, `about:blank`, and, with "New tab shows the Start page" on, a new-tab request that has no
+destination yet. It is the Omnibar at rest above the road's horizon, centred in the page area,
+focused, over the CRT road, a Scene that fills the page area, drawn as the website draws it in a
+viewport of that size, and never runs under the sidebar. It costs no engine. With the switch off, a
+new-tab request over a page opens the Omnibar over that page instead. With it on, the Start page
+stands over the page on show until `Escape` gives that page back. _Avoid_: Home page, new tab page,
+about:blank, speed dial
 
 **Scene**: The drawing behind the Start page, and nothing else: the host sizes it, keeps its clock
 and shows it, through the CRT glass when it declares one. A Scene may also name the light it casts,
@@ -276,9 +278,9 @@ installations through a replaceable provider. _Avoid_: Backup, account
 
 **Sync projection**: The positive allowlist of browser state Sync may copy: Space names, colours and
 order, ordinary and Pinned open tabs, Folders with their members, approved Settings, keybindings,
-and filter subscriptions. Active Space and tab selection stay local, as do which Folders are
-collapsed and which pages are released, and Browsing data and every Private window are outside the
-projection. _Avoid_: Browser backup, profile snapshot, all settings
+Site styles, and filter subscriptions. Active Space and tab selection stay local, as do which
+Folders are collapsed and which pages are released, and Browsing data and every Private window are
+outside the projection. _Avoid_: Browser backup, profile snapshot, all settings
 
 **Site permission**: A Space-specific decision that allows or blocks an origin from using a
 protected browser capability. A Private window retains its Site permissions only while the shared
@@ -485,6 +487,20 @@ reader has turned it on in Settings. It is off by default, does not follow the B
 leaves a page whose own ground is already dark as written. It can be turned off for one site in a
 Space from Site information: a registrable domain, or the host and port of `localhost` or an IP
 address. _Avoid_: Dark mode, force dark, dark reader
+
+**Site style**: The reader's own CSS for a site, a `<host>.css` file in `styles/` in the
+configuration directory that styles the host and every host under it. It applies whether or not
+Content blocking is on for the site, everywhere but an Agent Space, and an edit restyles open pages
+at once. _Avoid_: User style, user stylesheet, custom CSS
+
+**Site style panel**: The panel docked opposite the sidebar, beside the page, where the reader
+writes the Site style of the page's site and hides parts of it. "Style this site" in the page menu
+or the Omnibar, or `Primary+Shift+S`, opens and closes it. It follows the page on show and is not
+offered in an Agent Space. _Avoid_: Boost, style editor, sidebar
+
+**Picker**: The Site style panel's way of hiding an element by pointing at it: hover highlights, a
+click picks, the keys move the pick, and Hide writes a rule for it into the site's file, on a line
+marked `/* Hidden by Omaweb */`. _Avoid_: Zapper, element zapper, inspector
 
 **Zoom**: A tab's own enlargement of its page over the Page scale. It belongs to the tab and never
 to a site. _Avoid_: Site zoom, page scale

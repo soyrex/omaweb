@@ -355,6 +355,12 @@ bool writeFile(const QString &path, const QByteArray &contents)
         && file.write(contents) == contents.size();
 }
 
+QByteArray readFile(const QString &path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
 // The reader's settings as settings.json holds them.
 bool writeSettings(const QString &configRoot, const QJsonObject &values)
 {
@@ -388,8 +394,14 @@ private slots:
     void logsTheRecordARestoreFailedOn();
     void syncsOnlyTheApprovedConfiguration();
     void syncsTheAppIcon();
+    void syncsHowANewTabOpens();
+    void syncsWhetherTheSidebarHasANewTabRow();
     void syncsTheBrowserTheme();
     void syncsTheLinkRules();
+    void syncsWhichSiteStylesAreOff();
+    void syncsTheReadersSiteStyles();
+    void keepsASiteStyleChangedWhereAnotherMachineRemovedIt();
+    void keepsASiteStyleThisMachineHadBeforeItSynced();
     void keepsFollowingTheDesktopThemeAfterAPick();
     void keepsAPickMadeWhileAnotherMachineFollowsTheDesktop();
     void keepsAPickNotYetAppliedWhereTheDesktopIsFollowed();
@@ -939,6 +951,87 @@ void SyncModuleTest::syncsTheAppIcon()
         QJsonValue(QStringLiteral("theme")));
 }
 
+// Whether a new tab shows the Start page reaches the reader's other machines.
+void SyncModuleTest::syncsHowANewTabOpens()
+{
+    QTemporaryDir remoteRoot;
+    QTemporaryDir firstDataRoot;
+    QTemporaryDir firstConfigRoot;
+    QTemporaryDir secondDataRoot;
+    QTemporaryDir secondConfigRoot;
+    QString error;
+    QVERIFY2(runGit(remoteRoot.path(),
+                 {QStringLiteral("init"), QStringLiteral("--bare"),
+                     QStringLiteral("--initial-branch=main"), QStringLiteral("sync.git")},
+                 &error),
+        qPrintable(error));
+    const auto remote = QUrl::fromLocalFile(remoteRoot.filePath(QStringLiteral("sync.git")));
+    const auto key = QByteArray(32, 'i');
+
+    SqliteSessionStore firstStore(firstDataRoot.path());
+    QVERIFY(firstStore.open(&error));
+    QVERIFY(writeSettings(firstConfigRoot.path(), {{QStringLiteral("new-tab-start-page"), true}}));
+    SyncModule first({.dataRoot = firstDataRoot.path(),
+        .configRoot = firstConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-a")});
+    OMAWEB_VERIFY_SYNC(first.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+
+    SqliteSessionStore secondStore(secondDataRoot.path());
+    QVERIFY(secondStore.open(&error));
+    SyncModule second({.dataRoot = secondDataRoot.path(),
+        .configRoot = secondConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-b")});
+    OMAWEB_VERIFY_SYNC(second.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+
+    QCOMPARE(
+        setting(secondConfigRoot.path(), QStringLiteral("new-tab-start-page")), QJsonValue(true));
+}
+
+// A reader who hid the sidebar's "+ New tab" row has it hidden on their other
+// machines too.
+void SyncModuleTest::syncsWhetherTheSidebarHasANewTabRow()
+{
+    QTemporaryDir remoteRoot;
+    QTemporaryDir firstDataRoot;
+    QTemporaryDir firstConfigRoot;
+    QTemporaryDir secondDataRoot;
+    QTemporaryDir secondConfigRoot;
+    QString error;
+    QVERIFY2(runGit(remoteRoot.path(),
+                 {QStringLiteral("init"), QStringLiteral("--bare"),
+                     QStringLiteral("--initial-branch=main"), QStringLiteral("sync.git")},
+                 &error),
+        qPrintable(error));
+    const auto remote = QUrl::fromLocalFile(remoteRoot.filePath(QStringLiteral("sync.git")));
+    const auto key = QByteArray(32, 'j');
+
+    SqliteSessionStore firstStore(firstDataRoot.path());
+    QVERIFY(firstStore.open(&error));
+    QVERIFY(writeSettings(firstConfigRoot.path(), {{QStringLiteral("sidebar-new-tab"), false}}));
+    SyncModule first({.dataRoot = firstDataRoot.path(),
+        .configRoot = firstConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-a")});
+    OMAWEB_VERIFY_SYNC(first.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+
+    SqliteSessionStore secondStore(secondDataRoot.path());
+    QVERIFY(secondStore.open(&error));
+    SyncModule second({.dataRoot = secondDataRoot.path(),
+        .configRoot = secondConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-b")});
+    OMAWEB_VERIFY_SYNC(second.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+
+    QCOMPARE(
+        setting(secondConfigRoot.path(), QStringLiteral("sidebar-new-tab")), QJsonValue(false));
+}
+
 // A browser theme the reader picked reaches their other machines, which draw
 // it where it is installed and follow the desktop's where it is not.
 void SyncModuleTest::syncsTheBrowserTheme()
@@ -1025,6 +1118,230 @@ void SyncModuleTest::syncsTheLinkRules()
     OMAWEB_VERIFY_SYNC(settle(second, secondStore));
 
     QCOMPARE(setting(secondConfigRoot.path(), QStringLiteral("link-rules")), QJsonValue(rules));
+}
+
+// A style switched off stays off on every machine, and on again, while its
+// file syncs as it is.
+void SyncModuleTest::syncsWhichSiteStylesAreOff()
+{
+    QTemporaryDir remoteRoot;
+    QTemporaryDir firstDataRoot;
+    QTemporaryDir firstConfigRoot;
+    QTemporaryDir secondDataRoot;
+    QTemporaryDir secondConfigRoot;
+    QString error;
+    QVERIFY2(runGit(remoteRoot.path(),
+                 {QStringLiteral("init"), QStringLiteral("--bare"),
+                     QStringLiteral("--initial-branch=main"), QStringLiteral("sync.git")},
+                 &error),
+        qPrintable(error));
+    const auto remote = QUrl::fromLocalFile(remoteRoot.filePath(QStringLiteral("sync.git")));
+    const auto key = QByteArray(32, 'o');
+    const QJsonObject off {{QStringLiteral("news.ycombinator.com"), false}};
+
+    SqliteSessionStore firstStore(firstDataRoot.path());
+    QVERIFY(firstStore.open(&error));
+    QVERIFY(firstStore.saveSpace(SpaceState {
+        QStringLiteral("space-1"), QStringLiteral("Personal"), QStringLiteral("green"), true}));
+    QVERIFY(writeSettings(firstConfigRoot.path(), {{QStringLiteral("site-styles"), off}}));
+    SyncModule first({.dataRoot = firstDataRoot.path(),
+        .configRoot = firstConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-a")});
+    OMAWEB_VERIFY_SYNC(first.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+
+    SqliteSessionStore secondStore(secondDataRoot.path());
+    QVERIFY(secondStore.open(&error));
+    SyncModule second({.dataRoot = secondDataRoot.path(),
+        .configRoot = secondConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-b")});
+    OMAWEB_VERIFY_SYNC(second.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+
+    QCOMPARE(setting(secondConfigRoot.path(), QStringLiteral("site-styles")), QJsonValue(off));
+
+    // Every style back on leaves the key out, and that reaches the other
+    // machine too, as following the desktop's theme again does.
+    QVERIFY(writeSettings(
+        firstConfigRoot.path(), {{QStringLiteral("site-styles"), QJsonValue(QJsonValue::Null)}}));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+    QVERIFY(secondStore.saveSpace(SpaceState {
+        QStringLiteral("space-1"), QStringLiteral("Work"), QStringLiteral("green"), true}));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+    QVERIFY(!omaweb::SettingsFile(firstConfigRoot.path()).isSet(QStringLiteral("site-styles")));
+    QVERIFY(!omaweb::SettingsFile(secondConfigRoot.path()).isSet(QStringLiteral("site-styles")));
+}
+
+// The reader's site styles are files, so each machine gets the same bytes, a
+// removal included. A style another machine added and this one has not yet
+// taken is not mistaken for one the reader removed here.
+void SyncModuleTest::syncsTheReadersSiteStyles()
+{
+    QTemporaryDir remoteRoot;
+    QTemporaryDir firstDataRoot;
+    QTemporaryDir firstConfigRoot;
+    QTemporaryDir secondDataRoot;
+    QTemporaryDir secondConfigRoot;
+    QString error;
+    QVERIFY2(runGit(remoteRoot.path(),
+                 {QStringLiteral("init"), QStringLiteral("--bare"),
+                     QStringLiteral("--initial-branch=main"), QStringLiteral("sync.git")},
+                 &error),
+        qPrintable(error));
+    const auto remote = QUrl::fromLocalFile(remoteRoot.filePath(QStringLiteral("sync.git")));
+    const auto key = QByteArray(32, 'i');
+    const QDir firstStyles(firstConfigRoot.filePath(QStringLiteral("styles")));
+    const QDir secondStyles(secondConfigRoot.filePath(QStringLiteral("styles")));
+
+    SqliteSessionStore firstStore(firstDataRoot.path());
+    QVERIFY(firstStore.open(&error));
+    QVERIFY(firstStore.saveSpace(SpaceState {
+        QStringLiteral("space-1"), QStringLiteral("Personal"), QStringLiteral("green"), true}));
+    QVERIFY(writeFile(firstStyles.filePath(QStringLiteral("github.com.css")), "a { color: red; }"));
+    QVERIFY(writeFile(firstStyles.filePath(QStringLiteral("localhost.css")), "p { margin: 0; }"));
+    QVERIFY(
+        writeFile(firstStyles.filePath(QStringLiteral("github.com.css~")), "a { color: red; }"));
+    SyncModule first({.dataRoot = firstDataRoot.path(),
+        .configRoot = firstConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-a")});
+    OMAWEB_VERIFY_SYNC(first.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+
+    SqliteSessionStore secondStore(secondDataRoot.path());
+    QVERIFY(secondStore.open(&error));
+    SyncModule second({.dataRoot = secondDataRoot.path(),
+        .configRoot = secondConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-b")});
+    OMAWEB_VERIFY_SYNC(second.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+    QCOMPARE(readFile(secondStyles.filePath(QStringLiteral("github.com.css"))),
+        QByteArray("a { color: red; }"));
+    QCOMPARE(readFile(secondStyles.filePath(QStringLiteral("localhost.css"))),
+        QByteArray("p { margin: 0; }"));
+    QVERIFY(!secondStyles.exists(QStringLiteral("github.com.css~")));
+
+    QVERIFY(
+        writeFile(secondStyles.filePath(QStringLiteral("github.com.css")), "a { color: blue; }"));
+    QVERIFY(
+        writeFile(secondStyles.filePath(QStringLiteral("example.org.css")), "b { color: red; }"));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+    QVERIFY(QFile::remove(firstStyles.filePath(QStringLiteral("localhost.css"))));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+    QCOMPARE(readFile(firstStyles.filePath(QStringLiteral("github.com.css"))),
+        QByteArray("a { color: blue; }"));
+    QCOMPARE(readFile(firstStyles.filePath(QStringLiteral("example.org.css"))),
+        QByteArray("b { color: red; }"));
+    QVERIFY(!firstStyles.exists(QStringLiteral("localhost.css")));
+
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+    QVERIFY(!secondStyles.exists(QStringLiteral("localhost.css")));
+    QVERIFY(secondStyles.exists(QStringLiteral("example.org.css")));
+    QVERIFY(secondStyles.exists(QStringLiteral("github.com.css")));
+}
+
+// One machine removes a style while another, not yet synced, edits it. The
+// edit is the newer intent, and neither machine's Sync stops over it.
+void SyncModuleTest::keepsASiteStyleChangedWhereAnotherMachineRemovedIt()
+{
+    QTemporaryDir remoteRoot;
+    QTemporaryDir firstDataRoot;
+    QTemporaryDir firstConfigRoot;
+    QTemporaryDir secondDataRoot;
+    QTemporaryDir secondConfigRoot;
+    QString error;
+    QVERIFY2(runGit(remoteRoot.path(),
+                 {QStringLiteral("init"), QStringLiteral("--bare"),
+                     QStringLiteral("--initial-branch=main"), QStringLiteral("sync.git")},
+                 &error),
+        qPrintable(error));
+    const auto remote = QUrl::fromLocalFile(remoteRoot.filePath(QStringLiteral("sync.git")));
+    const auto key = QByteArray(32, 'i');
+    const auto firstStyle = firstConfigRoot.filePath(QStringLiteral("styles/github.com.css"));
+    const auto secondStyle = secondConfigRoot.filePath(QStringLiteral("styles/github.com.css"));
+
+    SqliteSessionStore firstStore(firstDataRoot.path());
+    QVERIFY(firstStore.open(&error));
+    QVERIFY(firstStore.saveSpace(SpaceState {
+        QStringLiteral("space-1"), QStringLiteral("Personal"), QStringLiteral("green"), true}));
+    QVERIFY(writeFile(firstStyle, "a { color: red; }"));
+    SyncModule first({.dataRoot = firstDataRoot.path(),
+        .configRoot = firstConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-a")});
+    OMAWEB_VERIFY_SYNC(first.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+
+    SqliteSessionStore secondStore(secondDataRoot.path());
+    QVERIFY(secondStore.open(&error));
+    SyncModule second({.dataRoot = secondDataRoot.path(),
+        .configRoot = secondConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-b")});
+    OMAWEB_VERIFY_SYNC(second.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+    QCOMPARE(readFile(secondStyle), QByteArray("a { color: red; }"));
+
+    QVERIFY(QFile::remove(firstStyle));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+    QVERIFY(writeFile(secondStyle, "a { color: blue; }"));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+    QCOMPARE(readFile(secondStyle), QByteArray("a { color: blue; }"));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+    QCOMPARE(readFile(firstStyle), QByteArray("a { color: blue; }"));
+}
+
+// A machine joining Sync takes the repository's Spaces before it sends its
+// own state. A style the reader wrote there before is theirs, not an old copy
+// of the repository's, so it is kept and sent to the other machines.
+void SyncModuleTest::keepsASiteStyleThisMachineHadBeforeItSynced()
+{
+    QTemporaryDir remoteRoot;
+    QTemporaryDir firstDataRoot;
+    QTemporaryDir firstConfigRoot;
+    QTemporaryDir secondDataRoot;
+    QTemporaryDir secondConfigRoot;
+    QString error;
+    QVERIFY2(runGit(remoteRoot.path(),
+                 {QStringLiteral("init"), QStringLiteral("--bare"),
+                     QStringLiteral("--initial-branch=main"), QStringLiteral("sync.git")},
+                 &error),
+        qPrintable(error));
+    const auto remote = QUrl::fromLocalFile(remoteRoot.filePath(QStringLiteral("sync.git")));
+    const auto key = QByteArray(32, 'i');
+    const auto firstStyle = firstConfigRoot.filePath(QStringLiteral("styles/github.com.css"));
+    const auto secondStyle = secondConfigRoot.filePath(QStringLiteral("styles/github.com.css"));
+
+    SqliteSessionStore firstStore(firstDataRoot.path());
+    QVERIFY(firstStore.open(&error));
+    QVERIFY(firstStore.saveSpace(SpaceState {
+        QStringLiteral("space-1"), QStringLiteral("Personal"), QStringLiteral("green"), true}));
+    QVERIFY(writeFile(firstStyle, "a { color: red; }"));
+    SyncModule first({.dataRoot = firstDataRoot.path(),
+        .configRoot = firstConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-a")});
+    OMAWEB_VERIFY_SYNC(first.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+
+    SqliteSessionStore secondStore(secondDataRoot.path());
+    QVERIFY(secondStore.open(&error));
+    QVERIFY(writeFile(secondStyle, "a { color: blue; }"));
+    SyncModule second({.dataRoot = secondDataRoot.path(),
+        .configRoot = secondConfigRoot.path(),
+        .remoteUrl = remote,
+        .machineId = QStringLiteral("machine-b")});
+    OMAWEB_VERIFY_SYNC(second.open({.recoveryKey = key}));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+    QCOMPARE(readFile(secondStyle), QByteArray("a { color: blue; }"));
+    OMAWEB_VERIFY_SYNC(settle(second, secondStore));
+    OMAWEB_VERIFY_SYNC(settle(first, firstStore));
+    QCOMPARE(readFile(firstStyle), QByteArray("a { color: blue; }"));
 }
 
 // A reader who picked a browser theme and then chose to follow the desktop

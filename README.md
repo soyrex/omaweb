@@ -13,9 +13,11 @@ a sidebar, separates browsing identities into Spaces, and follows the desktop th
 
 ## Highlights
 
-- The Omnibar is where every new tab starts, resting on the Start page's night road. It opens
-  addresses, searches the web with the engine's suggestions, switches to an open tab in any Space,
-  and runs commands.
+- The Omnibar is where every new tab starts, over the page on show. A new tab opens from
+  `Primary+T`, `t`, the command list, or the "+ New tab" row after the sidebar's tabs. Where there
+  is no page, or when the reader turns on "New tab shows the Start page", the Omnibar rests on the
+  Start page's night road. It opens addresses, searches the web with the engine's suggestions,
+  switches to an open tab in any Space, and runs commands.
 - Spaces keep cookies, logins, history, permissions, sessions, and tabs separate.
 - Keyboard navigation includes configurable bindings, link hints, and a shortcut sheet generated
   from the active keymap.
@@ -128,6 +130,7 @@ swipes continue to switch Spaces.
 | `Primary+O` and `Primary+I`   | Jump back to the previous tab and forward |
 | `Primary+F` or `/`            | Find in the page                          |
 | `Primary+Shift+I`             | Toggle Developer tools                    |
+| `Primary+Shift+S`             | Toggle the Site style panel               |
 | `Primary+B`                   | Hide or show the sidebar                  |
 | `f` or `Shift+F`              | Follow a link here or in a background tab |
 | `j`, `k`, `d`, `u`, `gg`, `G` | Scroll the page                           |
@@ -310,6 +313,13 @@ unset:
 - `agents.json` holds Allow agents and the agent command `:ask` runs. It is kept apart so that
   copying `settings.json` to another machine does not let Agents in there.
 - `keybindings.json` controls bindings and per-site key passthrough.
+- `styles/` holds your Site styles, your own CSS for sites, one file per host: `github.com.css`
+  styles github.com and every host under it. Saving a file restyles the site's open pages at once.
+  Agent Spaces are left unstyled. "Style this site" in the page menu or the Omnibar, or
+  `Primary+Shift+S`, opens a panel beside the page where typing restyles the site as you type and
+  the file is written once you pause. Pick an element to hide points at a part of the page and
+  writes a rule for it into the same file, and the panel lists each one with a preview and an undo.
+  A style switched off there or in Settings keeps its file.
 - `theme.json` controls the browser palette.
 - `search-engines.json` controls local search engines. DuckDuckGo is the default, and remote
   suggestions are off.
@@ -399,13 +409,13 @@ Omaweb has no telemetry, advertising identifier, browser account, hosted Omaweb 
 [network request ledger](docs/network-requests.md) lists every automatic request the browser makes.
 
 Sync is optional, off until you connect it, and unavailable in a Private window. It copies Spaces,
-tabs, keybindings, filter subscription addresses, and four approved Settings keys between your own
-machines through a private git repository you own. Spaces and tabs are encrypted before upload;
-keybindings, subscription addresses, and those settings are readable in that repository. Passwords,
-payment cards, cookies, browsing history, form history, saved addresses, downloads, site
-permissions, and every Private window never enter Sync. Payment cards are kept in your desktop's
-keyring and nowhere else. [What is synced, and what is not](docs/sync-privacy.md) states the full
-boundary and the forge permissions it asks for.
+tabs, keybindings, Site styles, filter subscription addresses, and six approved Settings keys
+between your own machines through a private git repository you own. Spaces and tabs are encrypted
+before upload; keybindings, Site styles, subscription addresses, and those settings are readable in
+that repository. Passwords, payment cards, cookies, browsing history, form history, saved addresses,
+downloads, site permissions, and every Private window never enter Sync. Payment cards are kept in
+your desktop's keyring and nowhere else. [What is synced, and what is not](docs/sync-privacy.md)
+states the full boundary and the forge permissions it asks for.
 
 HTTPS-only mode is on by default: a page's own address goes over HTTPS whoever wrote the link, and
 Omaweb asks before loading a site that cannot be reached that way over plain HTTP.
